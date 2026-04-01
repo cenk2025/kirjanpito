@@ -221,6 +221,80 @@ export function laskeErapaiva(laskupaiva, maksuehto = 14) {
   return d.toISOString().split('T')[0]
 }
 
+// ─── Pankkiviivakoodi (Finnish bank barcode version 5) ─
+
+/**
+ * Rakentaa suomalaisen pankkiviivakoodin (versio 5)
+ * Standardi: https://www.finanssiala.fi/maksaminen/dokumentit/Pankkiviivakoodistandardi.pdf
+ *
+ * Rakenne (54 merkkiä):
+ *   [1]  Versio: 5
+ *   [16] IBAN-numero ilman FI-etuliitettä (vain numerot, 16 kpl)
+ *   [6]  Eurot (6 numeroa, etunollat)
+ *   [2]  Sentit (2 numeroa)
+ *   [3]  Välimerkit: 000
+ *   [20] Viitenumero (oikealle tasattu, etunollat, ilman välilyöntejä)
+ *   [6]  Eräpäivä VVKKPP-muodossa
+ *
+ * @param {string} iban       - IBAN esim. "FI2112345600000785"
+ * @param {number} summa      - Maksettava summa euroina
+ * @param {string} viitenumero - Viitenumero (ilman välilyöntejä)
+ * @param {string} erapaiva   - ISO date "YYYY-MM-DD"
+ * @returns {string} 54-merkkinen viivakoodinumero tai null jos tiedot puuttuvat
+ */
+export function rakennaPankkiviivakoodi(iban, summa, viitenumero, erapaiva) {
+  if (!iban || !summa || !viitenumero || !erapaiva) return null
+
+  // IBAN: poista FI + tarkistenumeot → jäljelle jää 14-numeroinen tilinumero
+  // Muoto: FI[2 tarkiste][14 tilinumero] = 18 merkkiä yhteensä
+  const ibanPuhdas = iban.replace(/\s/g, '').toUpperCase()
+  if (!ibanPuhdas.startsWith('FI') || ibanPuhdas.length !== 18) return null
+  const tilinumero = ibanPuhdas.slice(2).padStart(16, '0') // 16 numeroa
+
+  // Summa: eurot 6 numeroa + sentit 2 numeroa
+  const summaPyoristetty = Math.round(summa * 100)
+  const eurot  = String(Math.floor(summaPyoristetty / 100)).padStart(6, '0')
+  const sentit = String(summaPyoristetty % 100).padStart(2, '0')
+
+  // Viitenumero: 20 numeroa, oikealle tasattu, etunollat
+  const viite = viitenumero.replace(/\s/g, '').padStart(20, '0')
+
+  // Eräpäivä: VVKKPP (2-digit year, month, day)
+  const [vuosi, kuukausi, paiva] = erapaiva.split('-')
+  const pvmStr = vuosi.slice(2) + kuukausi + paiva
+
+  return `5${tilinumero}${eurot}${sentit}000${viite}${pvmStr}`
+}
+
+/**
+ * Rakentaa SEPA-maksun QR-koodin sisällön (EPC QR)
+ * Luettavissa suomalaisilla mobiilipankkisovelluksilla (OP, Nordea, S-Pankki jne.)
+ *
+ * @param {string} saajaNimi  - Yrityksen nimi
+ * @param {string} iban       - IBAN
+ * @param {number} summa      - Summa euroina
+ * @param {string} viite      - Viitenumero
+ * @param {string} viesti     - Vapaaehtoinen viesti
+ * @returns {string} QR-koodin tekstisisältö
+ */
+export function rakennaSepaQR(saajaNimi, iban, summa, viite, viesti = '') {
+  const ibanPuhdas = (iban || '').replace(/\s/g, '').toUpperCase()
+  const summaTeksti = `EUR${summa.toFixed(2)}`
+  return [
+    'BCD',          // Service tag
+    '002',          // Version
+    '1',            // Character set (UTF-8)
+    'SCT',          // SEPA Credit Transfer
+    '',             // BIC (vapaaehtoinen)
+    saajaNimi.substring(0, 70),
+    ibanPuhdas,
+    summaTeksti,
+    '',             // Purpose (vapaaehtoinen)
+    viite.replace(/\s/g, ''),
+    viesti.substring(0, 140),
+  ].join('\n')
+}
+
 // ─── ALV-kauden laskenta ───────────────────────────────
 
 /**

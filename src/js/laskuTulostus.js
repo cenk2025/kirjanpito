@@ -3,7 +3,7 @@
 // Avaa tulostettavan version selainikkunassa
 // ═══════════════════════════════════════════════════════
 
-import { laskeLaskuSummat, muotoileViitenumero } from '../utils/laskuri.js'
+import { laskeLaskuSummat, muotoileViitenumero, rakennaPankkiviivakoodi, rakennaSepaQR } from '../utils/laskuri.js'
 import { formatoiEuro, formatoiPaiva, formatoiIBAN } from '../utils/formatters.js'
 
 export function tulostalasku(lasku) {
@@ -12,6 +12,20 @@ export function tulostalasku(lasku) {
   const asiakas = lasku.asiakas || {}
   const rivit = lasku.rivit || []
   const summat = laskeLaskuSummat(rivit)
+
+  // Barkod & QR verisi
+  const iban = lasku._profiili?.iban || ''
+  const viitenumero = lasku.viitenumero || ''
+  const pankkiviivakoodi = rakennaPankkiviivakoodi(
+    iban, summat.verollinenYhteensa, viitenumero, lasku.erapaiva
+  )
+  const sepaQR = iban ? rakennaSepaQR(
+    lasku._profiili?.yritys_nimi || '',
+    iban,
+    summat.verollinenYhteensa,
+    viitenumero,
+    `Lasku ${lasku.laskunumero}`
+  ) : null
 
   const riviHTML = rivit.map(r => {
     const verollinenYhteensa = r.maara * r.yksikkohinta * (1 + r.alv_kanta / 100)
@@ -173,10 +187,68 @@ export function tulostalasku(lasku) {
       color: #888;
       text-align: center;
     }
+    /* Barkod & QR */
+    .barcode-section {
+      margin-top: 10mm;
+      padding-top: 6mm;
+      border-top: 2px solid #111;
+    }
+    .barcode-section h3 {
+      font-size: 8pt;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #888;
+      margin-bottom: 4mm;
+    }
+    .barcode-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8mm;
+    }
+    .barcode-wrap {
+      flex: 1;
+    }
+    .barcode-wrap label {
+      display: block;
+      font-size: 7pt;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 2mm;
+    }
+    #barcode-canvas {
+      display: block;
+      max-width: 100%;
+      height: 18mm;
+    }
+    .barcode-number {
+      font-size: 8pt;
+      font-family: 'Courier New', monospace;
+      letter-spacing: 0.05em;
+      margin-top: 2mm;
+      color: #333;
+    }
+    .qr-wrap {
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .qr-wrap label {
+      display: block;
+      font-size: 7pt;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 2mm;
+    }
+    #qr-canvas { display: block; }
     @media print {
       body { padding: 0; }
     }
   </style>
+  <!-- JsBarcode CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+  <!-- QRCode CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 </head>
 <body>
 
@@ -286,7 +358,7 @@ export function tulostalasku(lasku) {
       </div>
       <div class="payment-item">
         <label>Viitenumero</label>
-        <strong>${lasku.viitenumero ? lasku.viitenumero : '—'}</strong>
+        <strong>${lasku.viitenumero ? muotoileViitenumero(lasku.viitenumero) : '—'}</strong>
       </div>
       <div class="payment-item">
         <label>Eräpäivä</label>
@@ -303,11 +375,62 @@ export function tulostalasku(lasku) {
 
   ${lasku._profiili?.viivastyskorko ? `<p style="margin-top:6mm;font-size:8pt;color:#888">${lasku._profiili.viivastyskorko}</p>` : ''}
 
+  <!-- Pankkiviivakoodi + QR -->
+  ${(pankkiviivakoodi || sepaQR) ? `
+  <div class="barcode-section">
+    <h3>Maksukoodi</h3>
+    <div class="barcode-row">
+      ${pankkiviivakoodi ? `
+      <div class="barcode-wrap">
+        <label>Pankkiviivakoodi (FI versio 5)</label>
+        <canvas id="barcode-canvas"></canvas>
+        <div class="barcode-number">${pankkiviivakoodi}</div>
+      </div>
+      ` : ''}
+      ${sepaQR ? `
+      <div class="qr-wrap">
+        <label>SEPA QR-maksukoodi</label>
+        <canvas id="qr-canvas" width="80" height="80"></canvas>
+        <div style="font-size:7pt;color:#888;margin-top:1mm">Skannaa mobiilipankilla</div>
+      </div>
+      ` : ''}
+    </div>
+  </div>
+  ` : ''}
+
   <div class="footer">
     ${[lasku._profiili?.yritys_nimi, lasku._profiili?.y_tunnus ? 'Y-tunnus: ' + lasku._profiili.y_tunnus : '', lasku._profiili?.sahkoposti].filter(Boolean).join(' | ')}
   </div>
 
-  <script>window.print();</script>
+  <script>
+    // Pankkiviivakoodi
+    const barcodeCanvas = document.getElementById('barcode-canvas');
+    if (barcodeCanvas && typeof JsBarcode !== 'undefined') {
+      try {
+        JsBarcode(barcodeCanvas, '${pankkiviivakoodi || ''}', {
+          format: 'CODE128',
+          width: 1.5,
+          height: 55,
+          displayValue: false,
+          margin: 0,
+        });
+      } catch(e) { barcodeCanvas.style.display = 'none'; }
+    }
+
+    // SEPA QR
+    const qrCanvas = document.getElementById('qr-canvas');
+    if (qrCanvas && typeof QRCode !== 'undefined') {
+      QRCode.toCanvas(qrCanvas, ${JSON.stringify(sepaQR || '')}, {
+        width: 90,
+        margin: 1,
+        color: { dark: '#000000', light: '#ffffff' }
+      }, function(err) {
+        if (err) qrCanvas.style.display = 'none';
+      });
+    }
+
+    window.print();
+  </script>
 </body>
 </html>`
 
