@@ -28,9 +28,14 @@ let _asiakkaat = []
 export async function renderLaskut(kayttajaId, polku) {
   _kayttajaId = kayttajaId
 
-  // Reitti: laskut/uusi tai laskut/:id
+  // Reitti: laskut/uusi, laskut/muokkaa/:id tai laskut/:id
   if (polku === 'laskut/uusi') {
     await renderUusiLasku()
+    return
+  }
+  if (polku.startsWith('laskut/muokkaa/')) {
+    const id = polku.slice('laskut/muokkaa/'.length)
+    await renderUusiLasku(id)
     return
   }
   const idOsa = polku.replace('laskut/', '')
