@@ -220,7 +220,12 @@ function renderKuluLista() {
     }
   })
 
-  document.getElementById('kulu-haku')?.addEventListener('input', suodataKulut)
+  let _kuluHakuTimer = null
+  const suodataDebounced = () => {
+    clearTimeout(_kuluHakuTimer)
+    _kuluHakuTimer = setTimeout(suodataKulut, 150)
+  }
+  document.getElementById('kulu-haku')?.addEventListener('input', suodataDebounced)
   document.getElementById('kulu-kategoria-filter')?.addEventListener('change', suodataKulut)
 }
 

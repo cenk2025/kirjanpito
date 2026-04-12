@@ -91,7 +91,7 @@ function renderLaskuListaHTML(laskut) {
         : `<span style="color:var(--text-3);font-size:0.78rem">${paiviaJaljella} pv</span>`
 
     return `
-      <tr style="cursor:pointer" data-id="${l.id}">
+      <tr style="cursor:pointer" data-id="${l.id}" data-tila="${efektiivinenTila}" data-haku="${(l.laskunumero + ' ' + (l.asiakas?.nimi || '')).toLowerCase()}">
         <td><strong style="color:var(--lime)">${l.laskunumero}</strong></td>
         <td>${l.asiakas?.nimi || '—'}</td>
         <td>${formatoiPaiva(l.laskupaiva)}</td>
@@ -195,14 +195,19 @@ function lisaaLaskuListaTapahtumankuuntelijat() {
     if (rivi) navigoi(`laskut/${rivi.dataset.id}`)
   })
 
-  // Haku
-  document.getElementById('lasku-haku')?.addEventListener('input', (e) => {
-    suodataLaskut(e.target.value, document.getElementById('lasku-tila-filter')?.value)
-  })
-
-  document.getElementById('lasku-tila-filter')?.addEventListener('change', (e) => {
-    suodataLaskut(document.getElementById('lasku-haku')?.value, e.target.value)
-  })
+  // Haku — debounced
+  let _hakuTimer = null
+  const suodataDebounced = () => {
+    clearTimeout(_hakuTimer)
+    _hakuTimer = setTimeout(() => {
+      suodataLaskut(
+        document.getElementById('lasku-haku')?.value,
+        document.getElementById('lasku-tila-filter')?.value
+      )
+    }, 150)
+  }
+  document.getElementById('lasku-haku')?.addEventListener('input', suodataDebounced)
+  document.getElementById('lasku-tila-filter')?.addEventListener('change', suodataDebounced)
 }
 
 function suodataLaskut(hakusana, tila) {
@@ -210,11 +215,8 @@ function suodataLaskut(hakusana, tila) {
   const haku = (hakusana || '').toLowerCase()
 
   rivit.forEach(rivi => {
-    const teksti = rivi.textContent.toLowerCase()
-    const hakuOk = !haku || teksti.includes(haku)
-    const tilaOk = !tila || (tila === 'myohassa'
-      ? rivi.innerHTML.includes('Myöhässä')
-      : rivi.innerHTML.includes(LASKU_TILAT[tila]?.nimi || ''))
+    const hakuOk = !haku || (rivi.dataset.haku || '').includes(haku)
+    const tilaOk = !tila || rivi.dataset.tila === tila
     rivi.style.display = hakuOk && tilaOk ? '' : 'none'
   })
 }
@@ -531,9 +533,11 @@ function rakennalaskurivi(idx, rivi = {}) {
 }
 
 function lisaaRiviTapahtumankuuntelijat(rivi) {
-  rivi.querySelectorAll('input, select').forEach(input => {
+  rivi.querySelectorAll('input').forEach(input => {
     input.addEventListener('input', paivitaYhteenveto)
-    input.addEventListener('change', paivitaYhteenveto)
+  })
+  rivi.querySelectorAll('select').forEach(sel => {
+    sel.addEventListener('change', paivitaYhteenveto)
   })
   rivi.querySelector('[data-poista-rivi]')?.addEventListener('click', () => {
     const kaikki = document.querySelectorAll('.line-item-row')
