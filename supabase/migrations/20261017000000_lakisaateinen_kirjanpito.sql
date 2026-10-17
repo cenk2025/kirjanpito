@@ -31,7 +31,7 @@ SET search_path = public, auth, pg_temp
 AS $$
   SELECT CASE
     WHEN EXISTS (
-      SELECT 1 FROM auth.factors f
+      SELECT 1 FROM auth.mfa_factors f
       WHERE f.user_id = auth.uid() AND f.status = 'verified'
     ) THEN coalesce(auth.jwt() ->> 'aal', 'aal1') = 'aal2'
     ELSE true

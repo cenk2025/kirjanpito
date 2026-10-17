@@ -200,7 +200,7 @@ SELECT testi_odota_virhe($$INSERT INTO laskut (user_id, asiakas_id, laskupaiva, 
 
 -- ─── MFA: kun tekijä on vahvistettu, aal1-istunto ei näe mitään ────────
 RESET ROLE;
-INSERT INTO auth.factors (user_id, status) VALUES ('11111111-1111-1111-1111-111111111111', 'verified');
+INSERT INTO auth.mfa_factors (user_id, status) VALUES ('11111111-1111-1111-1111-111111111111', 'verified');
 SET ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
 SELECT set_config('request.jwt.claim.aal', 'aal1', false);
