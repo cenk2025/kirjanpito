@@ -1,274 +1,349 @@
-// Supabase client — credentials set in .env
-// Kopioi .env.example tiedosto .env:ksi ja lisää oikeat arvot
+// ═══════════════════════════════════════════════════════
+// SUPABASE — tietokanta-, tunnistus- ja tallennusrajapinta
+//
+// Kirjanpitoon kirjoitetaan vain tietokantafunktioiden (RPC) kautta.
+// Tietokanta valvoo täsmäytyksen, lukitukset ja numeroinnin.
+// ═══════════════════════════════════════════════════════
+
+import { createClient } from '@supabase/supabase-js'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+export const supabaseMaaritetty = !!(SUPABASE_URL && SUPABASE_ANON_KEY)
+
+if (!supabaseMaaritetty) {
   console.warn('[Supabase] Ympäristömuuttujat puuttuvat. Kopioi .env.example → .env ja lisää arvot.')
 }
 
-// Ladataan Supabase CDN:stä (ei npm-riippuvuutta)
-let _supabase = null
+export const supabase = createClient(SUPABASE_URL || 'http://localhost', SUPABASE_ANON_KEY || 'puuttuu', {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: false,
+    flowType: 'pkce',
+  },
+})
 
-export async function getSupabase() {
-  if (_supabase) return _supabase
+export const LIITE_BUCKET = 'tositteet'
 
-  if (!window.supabase) {
-    await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js')
+function tarkista({ data, error }) {
+  if (error) throw new Error(error.message || 'Tietokantavirhe')
+  return data
+}
+
+async function rpc(nimi, parametrit = {}) {
+  return tarkista(await supabase.rpc(nimi, parametrit))
+}
+
+/** Hakee kaikki rivit sivuttain (PostgREST palauttaa enintään 1000 riviä kerralla) */
+async function sivuta(rakenna, koko = 1000) {
+  const tulos = []
+  for (let alku = 0; ; alku += koko) {
+    const sivu = tarkista(await rakenna().range(alku, alku + koko - 1)) || []
+    tulos.push(...sivu)
+    if (sivu.length < koko) return tulos
   }
-
-  _supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true
-    }
-  })
-  return _supabase
 }
 
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script')
-    script.src = src
-    script.onload = resolve
-    script.onerror = reject
-    document.head.appendChild(script)
-  })
-}
-
-// ─── Auth helpers ──────────────────────────────────────
+// ─── Tunnistautuminen ──────────────────────────────────
 
 export async function kirjauduSisaan(email, salasana) {
-  const sb = await getSupabase()
-  const { data, error } = await sb.auth.signInWithPassword({ email, password: salasana })
-  if (error) throw error
-  return data
-}
-
-export async function rekisteroidy(email, salasana) {
-  const sb = await getSupabase()
-  const { data, error } = await sb.auth.signUp({ email, password: salasana })
-  if (error) throw error
-  return data
+  return tarkista(await supabase.auth.signInWithPassword({ email, password: salasana }))
 }
 
 export async function kirjauduUlos() {
-  const sb = await getSupabase()
-  const { error } = await sb.auth.signOut()
+  const { error } = await supabase.auth.signOut()
   if (error) throw error
 }
 
 export async function haeKayttaja() {
-  const sb = await getSupabase()
-  const { data: { user } } = await sb.auth.getUser()
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) return null
+  const { data: { user } } = await supabase.auth.getUser()
   return user
 }
 
-export async function onAuthStateChange(callback) {
-  const sb = await getSupabase()
-  return sb.auth.onAuthStateChange(callback)
+export function onAuthStateChange(callback) {
+  return supabase.auth.onAuthStateChange(callback)
 }
 
-// ─── Database helpers ──────────────────────────────────
+export async function vaihdaSalasana(uusi) {
+  return tarkista(await supabase.auth.updateUser({ password: uusi }))
+}
+
+// ─── Kaksivaiheinen tunnistautuminen (TOTP) ───────────
+
+export async function mfaTaso() {
+  return tarkista(await supabase.auth.mfa.getAuthenticatorAssuranceLevel())
+}
+
+export async function mfaTekijat() {
+  const data = tarkista(await supabase.auth.mfa.listFactors())
+  return data.totp || []
+}
+
+export async function mfaAloitaRekisterointi() {
+  // Poistetaan keskeneräiset, vahvistamattomat tekijät
+  const kaikki = tarkista(await supabase.auth.mfa.listFactors()).all || []
+  for (const f of kaikki.filter(f => f.status !== 'verified')) {
+    await supabase.auth.mfa.unenroll({ factorId: f.id })
+  }
+  return tarkista(await supabase.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Kirjanpito ' + Date.now() }))
+}
+
+export async function mfaVahvista(factorId, koodi) {
+  return tarkista(await supabase.auth.mfa.challengeAndVerify({ factorId, code: koodi }))
+}
+
+export async function mfaPoista(factorId) {
+  return tarkista(await supabase.auth.mfa.unenroll({ factorId }))
+}
+
+// ─── Profiili ja alustus ──────────────────────────────
+
+export async function alustaKirjanpito() {
+  return rpc('alusta_kirjanpito')
+}
 
 export async function haeProfiili(userId) {
-  const sb = await getSupabase()
-  const { data, error } = await sb
-    .from('profiilit')
-    .select('*')
-    .eq('user_id', userId)
-    .single()
-  if (error && error.code !== 'PGRST116') throw error
+  const { data, error } = await supabase.from('profiilit').select('*').eq('user_id', userId).maybeSingle()
+  if (error) throw new Error(error.message)
   return data
 }
 
-export async function tallennaProfiiili(userId, profiili) {
-  const sb = await getSupabase()
-  const { data, error } = await sb
-    .from('profiilit')
-    .upsert({ ...profiili, user_id: userId }, { onConflict: 'user_id' })
-    .select()
-    .single()
-  if (error) throw error
-  return data
+export async function tallennaProfiili(userId, profiili) {
+  return tarkista(await supabase.from('profiilit')
+    .upsert({ ...profiili, user_id: userId }, { onConflict: 'user_id' }).select().single())
 }
 
-// ─── Asiakkaat (Clients) ───────────────────────────────
+// ─── Tilikaudet ja tilit ──────────────────────────────
 
-export async function haeAsiakkaat(userId) {
-  const sb = await getSupabase()
-  const { data, error } = await sb
-    .from('asiakkaat')
-    .select('*')
-    .eq('user_id', userId)
-    .order('nimi')
-  if (error) throw error
-  return data || []
+export async function haeTilikaudet() {
+  return tarkista(await supabase.from('tilikaudet').select('*').order('alku', { ascending: false })) || []
+}
+
+export async function luoTilikausi(alku, loppu) {
+  return rpc('luo_tilikausi', { p_alku: alku, p_loppu: loppu })
+}
+
+export async function muutaTilikausi(id, alku, loppu) {
+  return rpc('muuta_tilikausi', { p_id: id, p_alku: alku, p_loppu: loppu })
+}
+
+export async function lukitseTilikausi(id) {
+  return rpc('lukitse_tilikausi', { p_id: id })
+}
+
+export async function haeTilit() {
+  return tarkista(await supabase.from('tilit').select('*').order('numero')) || []
+}
+
+export async function lisaaTili(userId, tili) {
+  return tarkista(await supabase.from('tilit').insert({ ...tili, user_id: userId }).select().single())
+}
+
+export async function paivitaTili(id, muutokset) {
+  return tarkista(await supabase.from('tilit').update(muutokset).eq('id', id).select().single())
+}
+
+// ─── Asiakkaat ─────────────────────────────────────────
+
+export async function haeAsiakkaat() {
+  return tarkista(await supabase.from('asiakkaat').select('*').order('nimi')) || []
 }
 
 export async function tallennaAsiakas(userId, asiakas) {
-  const sb = await getSupabase()
-  const payload = { ...asiakas, user_id: userId }
-  if (asiakas.id) {
-    const { data, error } = await sb.from('asiakkaat').update(payload).eq('id', asiakas.id).select().single()
-    if (error) throw error
-    return data
-  } else {
-    const { data, error } = await sb.from('asiakkaat').insert(payload).select().single()
-    if (error) throw error
-    return data
-  }
+  const { id, ...muut } = asiakas
+  const payload = { ...muut, user_id: userId }
+  if (id) return tarkista(await supabase.from('asiakkaat').update(payload).eq('id', id).select().single())
+  return tarkista(await supabase.from('asiakkaat').insert(payload).select().single())
 }
 
 export async function poistaAsiakas(id) {
-  const sb = await getSupabase()
-  const { error } = await sb.from('asiakkaat').delete().eq('id', id)
-  if (error) throw error
+  const { error } = await supabase.from('asiakkaat').delete().eq('id', id)
+  if (error) {
+    if (error.code === '23503') {
+      // Asiakkaalla on laskuja: arkistoidaan poistamisen sijaan
+      return tarkista(await supabase.from('asiakkaat').update({ arkistoitu: true }).eq('id', id).select().single())
+    }
+    throw new Error(error.message)
+  }
+  return null
 }
 
-// ─── Laskut (Invoices) ────────────────────────────────
+// ─── Laskut ────────────────────────────────────────────
 
-export async function haeLaskut(userId) {
-  const sb = await getSupabase()
-  const { data, error } = await sb
-    .from('laskut')
-    .select(`*, asiakas:asiakkaat(nimi), rivit:laskurivit(*)`)
-    .eq('user_id', userId)
+export async function haeLaskut() {
+  return sivuta(() => supabase.from('laskut')
+    .select('*, asiakas:asiakkaat(nimi), rivit:laskurivit(*)')
     .order('laskupaiva', { ascending: false })
-  if (error) throw error
-  return data || []
+    .order('laskunumero', { ascending: false, nullsFirst: true })
+    .order('id'))
 }
 
 export async function haeLasku(id) {
-  const sb = await getSupabase()
-  const { data, error } = await sb
-    .from('laskut')
-    .select(`*, asiakas:asiakkaat(*), rivit:laskurivit(*)`)
-    .eq('id', id)
-    .single()
-  if (error) throw error
-  return data
+  const lasku = tarkista(await supabase.from('laskut')
+    .select('*, asiakas:asiakkaat(*), rivit:laskurivit(*)').eq('id', id).maybeSingle())
+  if (lasku?.rivit) lasku.rivit.sort((a, b) => (a.jarjestys ?? 0) - (b.jarjestys ?? 0))
+  return lasku
 }
 
-export async function tallennaLasku(userId, lasku, rivit) {
-  const sb = await getSupabase()
-  let laskuData
-
-  if (lasku.id) {
-    const { data, error } = await sb
-      .from('laskut')
-      .update({ ...lasku, user_id: userId })
-      .eq('id', lasku.id)
-      .select()
-      .single()
-    if (error) throw error
-    laskuData = data
-    // Poistetaan vanhat rivit
-    await sb.from('laskurivit').delete().eq('lasku_id', lasku.id)
+/** Tallentaa luonnoksen (rivit korvataan). Lähetetty lasku on lukittu tietokannassa. */
+export async function tallennaLaskuluonnos(userId, lasku, rivit) {
+  const { id, ...kentat } = lasku
+  const payload = { ...kentat, user_id: userId, tila: 'luonnos' }
+  let laskuId = id
+  if (id) {
+    tarkista(await supabase.from('laskut').update(payload).eq('id', id).select('id').single())
+    tarkista(await supabase.from('laskurivit').delete().eq('lasku_id', id))
   } else {
-    const { data, error } = await sb
-      .from('laskut')
-      .insert({ ...lasku, user_id: userId })
-      .select()
-      .single()
-    if (error) throw error
-    laskuData = data
+    laskuId = tarkista(await supabase.from('laskut').insert(payload).select('id').single()).id
   }
-
-  // Lisätään uudet rivit
-  if (rivit && rivit.length > 0) {
-    const riviData = rivit.map(r => ({ ...r, lasku_id: laskuData.id }))
-    const { error: riviError } = await sb.from('laskurivit').insert(riviData)
-    if (riviError) throw riviError
+  if (rivit.length > 0) {
+    tarkista(await supabase.from('laskurivit').insert(
+      rivit.map((r, i) => ({ ...r, lasku_id: laskuId, jarjestys: i }))))
   }
-
-  return laskuData
+  return laskuId
 }
 
-export async function paivitaLaskunTila(id, tila) {
-  const sb = await getSupabase()
-  const { data, error } = await sb
-    .from('laskut')
-    .update({ tila, maksettu_pvm: tila === 'maksettu' ? new Date().toISOString().split('T')[0] : null })
-    .eq('id', id)
-    .select()
-    .single()
-  if (error) throw error
-  return data
+export async function poistaLaskuluonnos(id) {
+  tarkista(await supabase.from('laskut').delete().eq('id', id))
 }
 
-export async function poistaLasku(id) {
-  const sb = await getSupabase()
-  await sb.from('laskurivit').delete().eq('lasku_id', id)
-  const { error } = await sb.from('laskut').delete().eq('id', id)
-  if (error) throw error
+export async function lahetaLasku(id) {
+  return rpc('laheta_lasku', { p_lasku: id })
 }
 
-export async function haeSeuraavaLaskunumero(userId) {
-  const sb = await getSupabase()
-  const vuosi = new Date().getFullYear()
-  const { data, error } = await sb
-    .from('laskut')
-    .select('laskunumero')
-    .eq('user_id', userId)
-    .like('laskunumero', `${vuosi}-%`)
-    .order('laskunumero', { ascending: false })
-    .limit(1)
-  if (error) throw error
-  if (!data || data.length === 0) return `${vuosi}-001`
-  const viimeisin = data[0].laskunumero
-  const numero = parseInt(viimeisin.split('-')[1] || '0') + 1
-  return `${vuosi}-${String(numero).padStart(3, '0')}`
+export async function kirjaaMaksu(laskuId, pvm, summa, pankkitapahtumaId = null) {
+  return rpc('kirjaa_maksu', { p_lasku: laskuId, p_pvm: pvm, p_summa: summa, p_pankkitapahtuma: pankkitapahtumaId })
 }
 
-// ─── Kulut (Expenses) ─────────────────────────────────
-
-export async function haeKulut(userId, alku, loppu) {
-  const sb = await getSupabase()
-  let query = sb
-    .from('kulut')
-    .select('*')
-    .eq('user_id', userId)
-    .order('paiva', { ascending: false })
-  if (alku) query = query.gte('paiva', alku)
-  if (loppu) query = query.lte('paiva', loppu)
-  const { data, error } = await query
-  if (error) throw error
-  return data || []
+export async function luoHyvityslasku(laskuId, syy, pvm) {
+  return rpc('luo_hyvityslasku', { p_lasku: laskuId, p_syy: syy, p_pvm: pvm })
 }
 
-export async function tallennaKulu(userId, kulu) {
-  const sb = await getSupabase()
-  const payload = { ...kulu, user_id: userId }
-  if (kulu.id) {
-    const { data, error } = await sb.from('kulut').update(payload).eq('id', kulu.id).select().single()
-    if (error) throw error
-    return data
-  } else {
-    const { data, error } = await sb.from('kulut').insert(payload).select().single()
-    if (error) throw error
-    return data
-  }
+// ─── Kulut ─────────────────────────────────────────────
+
+export async function haeKulut(alku, loppu) {
+  return sivuta(() => {
+    let q = supabase.from('kulut').select('*, tili:tilit(numero, nimi)').order('paiva', { ascending: false }).order('id')
+    if (alku) q = q.gte('paiva', alku)
+    if (loppu) q = q.lte('paiva', loppu)
+    return q
+  })
 }
 
-export async function poistaKulu(id) {
-  const sb = await getSupabase()
-  const { error } = await sb.from('kulut').delete().eq('id', id)
-  if (error) throw error
+export async function tallennaKulu(kulu) {
+  return rpc('tallenna_kulu', { p: kulu })
 }
 
-// ─── Tilastot (Stats) ─────────────────────────────────
+export async function peruKulu(id, syy) {
+  return rpc('peru_kulu', { p_id: id, p_syy: syy })
+}
 
-export async function haeLiikevaihtoKuukausittain(userId, vuosi) {
-  const sb = await getSupabase()
-  const { data, error } = await sb
-    .from('laskut')
-    .select('laskupaiva, rivit:laskurivit(maara, yksikkohinta, alv_kanta)')
-    .eq('user_id', userId)
-    .in('tila', ['maksettu', 'lahetetty'])
-    .gte('laskupaiva', `${vuosi}-01-01`)
-    .lte('laskupaiva', `${vuosi}-12-31`)
-  if (error) throw error
-  return data || []
+export async function lisaaKulunLiite(id, polku) {
+  return rpc('lisaa_kulun_liite', { p_id: id, p_polku: polku })
+}
+
+// ─── Tositeliitteet (Storage) ──────────────────────────
+
+const SALLITUT_TYYPIT = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic',
+  'application/xml', 'text/xml']
+
+export async function lataaLiite(userId, tiedosto) {
+  if (!SALLITUT_TYYPIT.includes(tiedosto.type)) throw new Error('Sallitut tiedostot: PDF, JPG, PNG, WEBP, HEIC, XML')
+  if (tiedosto.size > 10 * 1024 * 1024) throw new Error('Tiedosto on yli 10 Mt')
+  const turvallinen = tiedosto.name.normalize('NFKD').replace(/[^\w.-]+/g, '_').slice(-80)
+  const polku = `${userId}/${new Date().getFullYear()}/${crypto.randomUUID()}-${turvallinen}`
+  tarkista(await supabase.storage.from(LIITE_BUCKET).upload(polku, tiedosto, {
+    contentType: tiedosto.type, upsert: false,
+  }))
+  return polku
+}
+
+export async function liitteenLinkki(polku) {
+  const data = tarkista(await supabase.storage.from(LIITE_BUCKET).createSignedUrl(polku, 120))
+  return data.signedUrl
+}
+
+// ─── Kirjanpito ────────────────────────────────────────
+
+export async function haeTositteet(alku, loppu) {
+  return sivuta(() => supabase.from('tositteet')
+    .select('*, viennit(*, tili:tilit(numero, nimi))')
+    .gte('pvm', alku).lte('pvm', loppu)
+    .order('pvm').order('numero'), 500)
+}
+
+export async function haeTilinViennit(tiliNumero, alku, loppu) {
+  return sivuta(() => supabase.from('viennit')
+    .select('*, tili:tilit!inner(numero, nimi), tosite:tositteet!inner(numero, pvm, selite, lahde)')
+    .eq('tili.numero', tiliNumero)
+    .gte('tosite.pvm', alku).lte('tosite.pvm', loppu)
+    .order('id'))
+}
+
+export async function haeTilisaldot(alku, loppu) {
+  return rpc('tilisaldot', { p_alku: alku, p_loppu: loppu })
+}
+
+export async function kirjaaMuistiotosite(pvm, selite, viennit) {
+  return rpc('kirjaa_muistiotosite', { p_pvm: pvm, p_selite: selite, p_viennit: viennit })
+}
+
+export async function oikaiseTosite(id, syy) {
+  return rpc('oikaise_tosite', { p_tosite: id, p_syy: syy })
+}
+
+export async function kirjaaVanhatTiedot() {
+  return rpc('kirjaa_vanhat_tiedot')
+}
+
+// ─── ALV ───────────────────────────────────────────────
+
+export async function haeAlvLaskelma(alku, loppu) {
+  return rpc('alv_laskelma', { p_alku: alku, p_loppu: loppu })
+}
+
+export async function haeYhteenvetoilmoitus(alku, loppu) {
+  return rpc('yhteenvetoilmoitus', { p_alku: alku, p_loppu: loppu })
+}
+
+export async function kirjaaAlvTilitys(alku, loppu) {
+  return rpc('kirjaa_alv_tilitys', { p_alku: alku, p_loppu: loppu })
+}
+
+// ─── Pankki ────────────────────────────────────────────
+
+export async function haePankkitapahtumat(tila = null) {
+  return sivuta(() => {
+    let q = supabase.from('pankkitapahtumat').select('*').order('pvm', { ascending: false }).order('id')
+    if (tila) q = q.eq('tila', tila)
+    return q
+  })
+}
+
+export async function tuoPankkitapahtumat(tapahtumat) {
+  return rpc('tuo_pankkitapahtumat', { p: tapahtumat })
+}
+
+export async function kirjaaPankkitapahtuma(id, tili, selite) {
+  return rpc('kirjaa_pankkitapahtuma', { p_id: id, p_tili: tili, p_selite: selite })
+}
+
+export async function ohitaPankkitapahtuma(id, ohita = true) {
+  return rpc('ohita_pankkitapahtuma', { p_id: id, p_ohita: ohita })
+}
+
+// ─── Muutosloki ja varmuuskopio ────────────────────────
+
+export async function haeMuutosloki(raja = 200) {
+  return tarkista(await supabase.from('muutosloki').select('*').order('aika', { ascending: false }).limit(raja)) || []
+}
+
+/** Hakee kaikki käyttäjän tiedot varmuuskopioon (sivutettuna) */
+export async function haeKaikki(taulu, valinta = '*') {
+  const jarjestys = taulu === 'profiilit' || taulu === 'numerosarjat' ? 'user_id' : 'id'
+  return sivuta(() => supabase.from(taulu).select(valinta).order(jarjestys))
 }

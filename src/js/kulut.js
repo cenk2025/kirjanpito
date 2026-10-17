@@ -1,352 +1,285 @@
 // ═══════════════════════════════════════════════════════
-// KULUT — Expense tracking
+// KULUT — Ostot ja kulut tositteineen
+//
+// Jokaiselle kululle tarvitaan tosite (kuitti/lasku, KPL 2:5).
+// Tallennus kirjaa kulun heti pääkirjaan. Korjaus tehdään
+// oikaisutositteella; peruttu kulu säilyy näkyvissä.
 // ═══════════════════════════════════════════════════════
 
-import { haeKulut, tallennaKulu, poistaKulu } from '../utils/supabase.js'
-import { formatoiEuro, formatoiPaiva, isoTanaan, KULU_KATEGORIAT } from '../utils/formatters.js'
-import { ALV_KANNAT, eritteleALV } from '../utils/laskuri.js'
 import {
-  renderNakyma, asetaTopbarToiminnot, avaaModaali,
-  suljeModaali, naytaToast, naytaVahvistus, tyhjaLista
+  haeKulut, tallennaKulu, peruKulu, lisaaKulunLiite, lataaLiite, liitteenLinkki, haeTilit, haeProfiili, haeKayttaja,
+} from '../utils/supabase.js'
+import { formatoiEuro, formatoiPaiva, isoTanaan, OSTON_ALV_KASITTELYT, MAKSUTAVAT } from '../utils/formatters.js'
+import { alvKannatPaivalle, eritteleALV, laskeALV } from '../utils/laskuri.js'
+import { html } from '../utils/html.js'
+import {
+  renderNakyma, asetaTopbarToiminnot, avaaModaali, suljeModaali, naytaToast, naytaVahvistus,
+  naytaVirhe, virheNakyma, naytaLatausRuutu, tyhjaLista, PLUS_IKONI,
 } from './ui.js'
 
 let _kayttajaId = null
 let _kulut = []
+let _tilit = []
+let _vuosi = new Date().getFullYear()
 
 export async function renderKulut(kayttajaId) {
   _kayttajaId = kayttajaId
-
-  asetaTopbarToiminnot(`
-    <button class="btn btn-primary btn-sm" id="uusi-kulu-btn">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-      </svg>
-      Kirjaa kulu
-    </button>
-  `)
-
-  renderNakyma('<div class="loading-screen"><div class="spinner"></div></div>')
-
+  asetaTopbarToiminnot(html`<button class="btn btn-primary btn-sm" id="uusi-kulu-btn">${PLUS_IKONI} Kirjaa kulu</button>`)
+  document.getElementById('uusi-kulu-btn')?.addEventListener('click', () => avaaKuluLomake())
+  naytaLatausRuutu()
   try {
-    _kulut = await haeKulut(kayttajaId)
-    renderKuluLista()
+    ;[_kulut, _tilit] = await Promise.all([haeKulut(`${_vuosi}-01-01`, `${_vuosi}-12-31`), haeTilit()])
+    renderLista()
   } catch (err) {
-    renderNakyma(`<div class="alert alert-error">Kulujen lataus epäonnistui: ${err.message}</div>`)
+    virheNakyma('Kulujen lataus epäonnistui', err)
   }
 }
 
-function renderKuluLista() {
-  document.getElementById('uusi-kulu-btn')?.addEventListener('click', () => avaaKuluLomake())
+async function paivita() {
+  _kulut = await haeKulut(`${_vuosi}-01-01`, `${_vuosi}-12-31`)
+  renderLista()
+}
 
-  if (_kulut.length === 0) {
-    renderNakyma(`
-      <div class="section-header">
-        <div><h1 class="section-title">Kulut</h1></div>
-      </div>
-      ${tyhjaLista('Ei kirjattuja kuluja', 'Kirjaa ensimmäinen kulusi verovähennysten seurantaa varten.', 'Kirjaa kulu', 'empty-uusi-kulu')}
-    `)
-    document.getElementById('empty-uusi-kulu')?.addEventListener('click', () => avaaKuluLomake())
-    return
-  }
+function renderLista() {
+  const vuodet = [0, 1, 2, 3].map(i => new Date().getFullYear() - i)
+  const voimassa = _kulut.filter(k => k.tila !== 'peruttu')
+  const yhteensa = voimassa.reduce((s, k) => s + Number(k.summa), 0)
+  const alvVahennys = voimassa.filter(k => k.alv_vahennys).reduce((s, k) => s + Number(k.alv_summa || 0), 0)
+  const ilmanTositetta = voimassa.filter(k => !k.liitteet?.length).length
 
-  // Laske yhteenvedot
-  const yhteensa = _kulut.reduce((s, k) => s + (parseFloat(k.summa) || 0), 0)
-  const alvYhteensa = _kulut.reduce((s, k) => {
-    if (!k.alv_kanta || k.alv_kanta === 0) return s
-    const { alv } = eritteleALV(parseFloat(k.summa) || 0, k.alv_kanta)
-    return s + alv
-  }, 0)
-
-  // Kategoriayhteenveto
-  const kategoriat = {}
-  for (const k of _kulut) {
-    const kat = k.kategoria || 'Muut kulut'
-    kategoriat[kat] = (kategoriat[kat] || 0) + (parseFloat(k.summa) || 0)
-  }
-
-  const katRivit = Object.entries(kategoriat)
-    .sort(([, a], [, b]) => b - a)
-    .map(([kat, summa]) => `
-      <div style="display:flex;justify-content:space-between;padding:0.35rem 0;font-size:0.85rem;border-bottom:1px solid var(--border)">
-        <span style="color:var(--text-2)">${kat}</span>
-        <span>${formatoiEuro(summa)}</span>
-      </div>
-    `).join('')
-
-  const vuosi = new Date().getFullYear()
-  const kategoriaOptions = KULU_KATEGORIAT.map(k => `<option value="${k}">${k}</option>`).join('')
-
-  const rivit = _kulut.map(k => {
-    const veroton = k.alv_kanta ? eritteleALV(k.summa, k.alv_kanta).verotonHinta : k.summa
-    return `
-      <tr>
-        <td>${formatoiPaiva(k.paiva)}</td>
-        <td>
-          <div style="font-weight:500">${k.kuvaus}</div>
-          ${k.kuitin_numero ? `<div style="font-size:0.75rem;color:var(--text-3)">Kuitti: ${k.kuitin_numero}</div>` : ''}
-        </td>
-        <td><span class="badge badge-luonnos">${k.kategoria || 'Muut kulut'}</span></td>
-        <td style="text-align:right">${formatoiEuro(veroton)}</td>
-        <td style="text-align:right">${k.alv_kanta ? k.alv_kanta + ' %' : '—'}</td>
-        <td style="text-align:right"><strong>${formatoiEuro(k.summa)}</strong></td>
-        <td>
-          <div class="table-actions">
-            <button class="btn btn-ghost btn-sm" data-action="muokkaa" data-id="${k.id}" title="Muokkaa">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-            </button>
-            <button class="btn btn-ghost btn-sm" data-action="poista" data-id="${k.id}" title="Poista">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
-              </svg>
-            </button>
-          </div>
-        </td>
-      </tr>
-    `
-  }).join('')
-
-  renderNakyma(`
+  renderNakyma(html`
     <div class="section-header">
-      <div>
-        <h1 class="section-title">Kulut</h1>
-        <p class="section-sub">${_kulut.length} merkintää</p>
+      <div><h1 class="section-title">Kulut ja ostot</h1>
+        <p class="section-sub">Kirjaa jokainen ostolasku ja kuitti tositteineen.</p></div>
+      <div class="period-selector">
+        ${vuodet.map(v => html`<button class="period-btn ${v === _vuosi ? 'active' : ''}" data-vuosi="${v}">${v}</button>`)}
       </div>
     </div>
-
-    <!-- Yhteenveto-kortit -->
     <div class="kpi-grid" style="margin-bottom:var(--s5)">
-      <div class="kpi-card" style="--kpi-color:var(--red);--kpi-color-soft:var(--red-soft)">
-        <div class="kpi-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>
-          </svg>
-        </div>
-        <div class="kpi-label">Kulut yhteensä</div>
-        <div class="kpi-value">${formatoiEuro(yhteensa)}</div>
-        <div class="kpi-change">Kaikki kirjatut kulut</div>
-      </div>
-      <div class="kpi-card" style="--kpi-color:var(--cyan);--kpi-color-soft:var(--cyan-soft)">
-        <div class="kpi-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/>
-          </svg>
-        </div>
-        <div class="kpi-label">Ostojen ALV (vähennyskelpoinen)</div>
-        <div class="kpi-value">${formatoiEuro(alvYhteensa)}</div>
-        <div class="kpi-change">Vähennä myynti-ALV:stä</div>
-      </div>
-      <div class="kpi-card" style="--kpi-color:var(--lime);--kpi-color-soft:var(--lime-soft)">
-        <div class="kpi-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-          </svg>
-        </div>
-        <div class="kpi-label">Kulukuitteja</div>
-        <div class="kpi-value">${_kulut.length} kpl</div>
-        <div class="kpi-change">Kirjattuja kuluja</div>
-      </div>
+      <div class="kpi-card"><div class="kpi-label">Kulut ${_vuosi}</div><div class="kpi-value">${formatoiEuro(yhteensa)}</div>
+        <div class="kpi-change">${voimassa.length} kirjausta</div></div>
+      <div class="kpi-card"><div class="kpi-label">Vähennettävä ALV</div><div class="kpi-value">${formatoiEuro(alvVahennys)}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Tosite puuttuu</div>
+        <div class="kpi-value" style="color:${ilmanTositetta ? 'var(--red)' : 'inherit'}">${ilmanTositetta}</div>
+        <div class="kpi-change">Liitä kuitti tai lasku jokaiseen kirjaukseen</div></div>
     </div>
-
-    <div style="display:grid;grid-template-columns:1fr 300px;gap:var(--s4);margin-bottom:var(--s4)">
-      <div>
-        <div class="filter-bar">
-          <input class="form-input" type="search" id="kulu-haku" placeholder="Hae kuluista…" />
-          <select class="form-select" id="kulu-kategoria-filter">
-            <option value="">Kaikki kategoriat</option>
-            ${KULU_KATEGORIAT.map(k => `<option value="${k}">${k}</option>`).join('')}
-          </select>
-          <select class="form-select" id="kulu-vuosi-filter">
-            <option value="${vuosi}">${vuosi}</option>
-            <option value="${vuosi - 1}">${vuosi - 1}</option>
-          </select>
-        </div>
-
-        <div class="table-wrapper">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Päivä</th>
-                <th>Kuvaus</th>
-                <th>Kategoria</th>
-                <th style="text-align:right">Veroton</th>
-                <th style="text-align:right">ALV %</th>
-                <th style="text-align:right">Yhteensä</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="kulut-tbody">${rivit}</tbody>
-            <tfoot>
-              <tr>
-                <td colspan="5" style="text-align:right;color:var(--text-2)">Yhteensä:</td>
-                <td style="text-align:right"><strong>${formatoiEuro(yhteensa)}</strong></td>
-                <td></td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
-
-      <!-- Kategoriapalkki -->
-      <div class="card">
-        <div class="card-title" style="margin-bottom:var(--s3)">Jakautuminen</div>
-        ${katRivit}
-      </div>
-    </div>
+    ${_kulut.length === 0 ? tyhjaLista('Ei kirjattuja kuluja', 'Kirjaa ensimmäinen kulu tositteineen.', 'Kirjaa kulu', 'empty-uusi-kulu') : html`
+      <div class="table-wrapper">
+        <table class="table">
+          <thead><tr><th>Päivä</th><th>Kuvaus</th><th>Tili</th><th style="text-align:right">Summa</th>
+            <th style="text-align:right">ALV</th><th>Tosite</th><th></th></tr></thead>
+          <tbody id="kulu-tbody">
+            ${_kulut.map(k => html`
+              <tr style="${k.tila === 'peruttu' ? 'opacity:0.5' : ''}">
+                <td>${formatoiPaiva(k.paiva)}</td>
+                <td><div style="font-weight:500">${k.kuvaus}</div>
+                  <div style="font-size:0.75rem;color:var(--text-3)">${[k.toimittaja, k.kuitin_numero ? 'Nro ' + k.kuitin_numero : '',
+                    k.alv_kasittely !== 'normaali' ? OSTON_ALV_KASITTELYT[k.alv_kasittely]?.split(' —')[0] : ''].filter(Boolean).join(' · ')}</div>
+                  ${k.tila === 'peruttu' ? html`<span class="badge badge-peruttu">Peruttu: ${k.peruutuksen_syy}</span>` : ''}</td>
+                <td>${k.tili ? `${k.tili.numero} ${k.tili.nimi}` : k.kategoria || '—'}</td>
+                <td style="text-align:right">${formatoiEuro(k.summa)}</td>
+                <td style="text-align:right">${k.alv_vahennys && Number(k.alv_summa) ? formatoiEuro(k.alv_summa) : '—'}</td>
+                <td>${k.liitteet?.length
+                  ? k.liitteet.map((p, i) => html`<button class="btn btn-ghost btn-sm" data-action="liite" data-polku="${p}">📎 ${i + 1}</button>`)
+                  : html`<span class="badge badge-myohassa">Puuttuu</span>`}</td>
+                <td><div class="table-actions">${k.tila === 'peruttu' ? '' : html`
+                  <button class="btn btn-ghost btn-sm" data-action="liita" data-id="${k.id}" title="Liitä tosite">+📎</button>
+                  <button class="btn btn-ghost btn-sm" data-action="korjaa" data-id="${k.id}">Korjaa</button>
+                  ${k.pankkitapahtuma_id ? '' : html`<button class="btn btn-ghost btn-sm" data-action="peru" data-id="${k.id}" style="color:var(--red)">Peru</button>`}`}
+                </div></td>
+              </tr>`)}
+          </tbody>
+        </table>
+      </div>`}
+    <input type="file" id="kulu-liite-input" class="hidden" accept="application/pdf,image/*,.xml" />
   `)
 
-  document.getElementById('kulut-tbody')?.addEventListener('click', async (e) => {
+  document.getElementById('empty-uusi-kulu')?.addEventListener('click', () => avaaKuluLomake())
+  document.querySelectorAll('.period-btn').forEach(b => b.addEventListener('click', () => {
+    _vuosi = Number(b.dataset.vuosi)
+    paivita().catch(e => naytaVirhe('Lataus epäonnistui', e))
+  }))
+
+  const liiteInput = document.getElementById('kulu-liite-input')
+  let liitettava = null
+  liiteInput?.addEventListener('change', async () => {
+    const tiedosto = liiteInput.files[0]
+    if (!tiedosto || !liitettava) return
+    try {
+      const polku = await lataaLiite(_kayttajaId, tiedosto)
+      await lisaaKulunLiite(liitettava, polku)
+      naytaToast('Tosite liitetty', 'success')
+      await paivita()
+    } catch (e) { naytaVirhe('Liitteen tallennus epäonnistui', e) }
+    liiteInput.value = ''
+  })
+
+  document.getElementById('kulu-tbody')?.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-action]')
     if (!btn) return
-    const id = btn.dataset.id
-    const kulu = _kulut.find(k => k.id === id)
-
-    if (btn.dataset.action === 'muokkaa') {
-      avaaKuluLomake(kulu)
-    } else if (btn.dataset.action === 'poista') {
-      const ok = await naytaVahvistus(`Haluatko poistaa kulun "${kulu?.kuvaus}"?`, 'Poista kulu')
-      if (ok) {
-        try {
-          await poistaKulu(id)
-          naytaToast('Kulu poistettu', 'success')
-          _kulut = await haeKulut(_kayttajaId)
-          renderKuluLista()
-        } catch (err) {
-          naytaToast('Poisto epäonnistui', 'error')
-        }
-      }
+    const kulu = _kulut.find(k => k.id === btn.dataset.id)
+    if (btn.dataset.action === 'liite') {
+      try { window.open(await liitteenLinkki(btn.dataset.polku), '_blank', 'noopener') } catch (err) { naytaVirhe('Liitteen avaus epäonnistui', err) }
+    } else if (btn.dataset.action === 'liita') {
+      liitettava = kulu.id
+      liiteInput.click()
+    } else if (btn.dataset.action === 'korjaa') {
+      avaaKuluLomake({ kulu })
+    } else if (btn.dataset.action === 'peru') {
+      const syy = await naytaVahvistus(`Kulu "${kulu.kuvaus}" (${formatoiEuro(kulu.summa)}) perutaan oikaisutositteella. Alkuperäinen kirjaus säilyy.`,
+        'Peru kulu', { kysy: 'Peruutuksen syy', okTeksti: 'Peru kulu' })
+      if (!syy) return
+      try { await peruKulu(kulu.id, syy); naytaToast('Kulu peruttu', 'success'); await paivita() } catch (err) { naytaVirhe('Peruutus epäonnistui', err) }
     }
   })
-
-  let _kuluHakuTimer = null
-  const suodataDebounced = () => {
-    clearTimeout(_kuluHakuTimer)
-    _kuluHakuTimer = setTimeout(suodataKulut, 150)
-  }
-  document.getElementById('kulu-haku')?.addEventListener('input', suodataDebounced)
-  document.getElementById('kulu-kategoria-filter')?.addEventListener('change', suodataKulut)
 }
 
-function suodataKulut() {
-  const haku = document.getElementById('kulu-haku')?.value.toLowerCase() || ''
-  const kat = document.getElementById('kulu-kategoria-filter')?.value || ''
-  document.querySelectorAll('#kulut-tbody tr').forEach(rivi => {
-    const hakuOk = !haku || rivi.textContent.toLowerCase().includes(haku)
-    const katOk = !kat || rivi.textContent.includes(kat)
-    rivi.style.display = hakuOk && katOk ? '' : 'none'
-  })
-}
+/**
+ * Kululomake. Valinnaiset: kulu (korjaus) tai pankkitapahtuma (tiliotteelta).
+ * onValmis kutsutaan tallennuksen jälkeen.
+ */
+export async function avaaKuluLomake({ kulu = null, pankkitapahtuma = null, onValmis = null } = {}) {
+  if (!_tilit.length) _tilit = await haeTilit()
+  if (!_kayttajaId) _kayttajaId = (await haeKayttaja())?.id
+  const pankista = !!(pankkitapahtuma || kulu?.pankkitapahtuma_id)
+  const profiili = await haeProfiili(_kayttajaId).catch(() => ({})) || {}
+  const alvRekisteroity = profiili.alv_rekisteroity !== false
+  const kulutilit = _tilit.filter(t => t.aktiivinen && (t.tyyppi === 'kulu' && !['9900', '5000', '6130', '6300', '6800'].includes(t.numero)
+    || ['1050', '1100'].includes(t.numero)))
+  const pvm = kulu?.paiva || pankkitapahtuma?.pvm || isoTanaan()
+  const summa = kulu?.summa ?? (pankkitapahtuma ? -Number(pankkitapahtuma.summa) : '')
+  const kannat = alvKannatPaivalle(pvm)
 
-function avaaKuluLomake(kulu = null) {
-  const otsikko = kulu ? 'Muokkaa kulua' : 'Kirjaa kulu'
-
-  const kategoriaOptions = KULU_KATEGORIAT.map(k =>
-    `<option value="${k}" ${kulu?.kategoria === k ? 'selected' : ''}>${k}</option>`
-  ).join('')
-
-  const alvOptions = ALV_KANNAT.map(k =>
-    `<option value="${k.arvo}" ${(kulu?.alv_kanta ?? 25.5) == k.arvo ? 'selected' : ''}>${k.nimi}</option>`
-  ).join('')
-
-  const html = `
-    <h2 class="modal-title">${otsikko}</h2>
+  avaaModaali(html`
+    <h2 class="modal-title">${kulu ? 'Korjaa kulu' : 'Kirjaa kulu'}</h2>
+    ${kulu ? html`<div class="alert alert-info" style="margin-bottom:var(--s3)">Korjaus oikaisee alkuperäisen kirjauksen ja kirjaa kulun uudelleen.</div>` : ''}
+    ${pankkitapahtuma ? html`<div class="alert alert-info" style="margin-bottom:var(--s3)">
+      Tiliotteelta: ${formatoiPaiva(pankkitapahtuma.pvm)} · ${pankkitapahtuma.vastapuoli || ''} · ${formatoiEuro(pankkitapahtuma.summa)}</div>` : ''}
     <form id="kulu-form">
       <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Päivämäärä *</label>
-          <input class="form-input" type="date" id="k-paiva" value="${kulu?.paiva || isoTanaan()}" required />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Kategoria</label>
-          <select class="form-select" id="k-kategoria">${kategoriaOptions}</select>
-        </div>
+        <div class="form-group"><label class="form-label">Tositteen päivä *</label>
+          <input class="form-input" type="date" id="k-paiva" value="${pvm}" ${pankista ? 'readonly' : ''} required /></div>
+        <div class="form-group"><label class="form-label">Toimittaja</label>
+          <input class="form-input" type="text" id="k-toimittaja" maxlength="200" value="${kulu?.toimittaja || pankkitapahtuma?.vastapuoli || ''}" /></div>
       </div>
-
-      <div class="form-group">
-        <label class="form-label">Kuvaus *</label>
-        <input class="form-input" type="text" id="k-kuvaus" value="${kulu?.kuvaus || ''}"
-          placeholder="Esim. Toimistotarvikkeet, Puhelin, Matkakulut…" required />
-      </div>
-
+      <div class="form-group"><label class="form-label">Kuvaus *</label>
+        <input class="form-input" type="text" id="k-kuvaus" maxlength="300" required
+          value="${kulu?.kuvaus || pankkitapahtuma?.viesti || ''}" placeholder="Mitä ostettiin ja mihin liiketoimintaan" /></div>
       <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Summa (ALV sis.) *</label>
-          <input class="form-input" type="number" id="k-summa" value="${kulu?.summa || ''}"
-            placeholder="0,00" min="0" step="0.01" required />
-        </div>
-        <div class="form-group">
-          <label class="form-label">ALV-kanta</label>
-          <select class="form-select" id="k-alv">${alvOptions}</select>
-        </div>
+        <div class="form-group"><label class="form-label">Kirjanpitotili *</label>
+          <select class="form-select" id="k-tili" required>
+            ${kulutilit.map(t => html`<option value="${t.numero}" data-alv="${t.alv_oletus || ''}"
+              ${(kulu?.tili?.numero || '7990') === t.numero ? 'selected' : ''}>${t.numero} ${t.nimi}</option>`)}
+          </select>
+          <div class="form-hint">Yli 1 200 €:n kone- tai laitehankinnat (kesto > 3 v) tilille 1100 ja poistoina.</div></div>
+        <div class="form-group"><label class="form-label">Maksutapa</label>
+          <select class="form-select" id="k-maksutapa" ${pankista ? 'disabled' : ''}>
+            ${Object.entries(MAKSUTAVAT).map(([k, v]) => html`<option value="${k}" ${(kulu?.maksutapa || 'pankki') === k ? 'selected' : ''}>${v}</option>`)}
+          </select></div>
       </div>
-
-      <div id="k-veroton-naytto" class="alert alert-info" style="font-size:0.85rem;margin-bottom:var(--s3)">
-        Veroton osuus: lasketaan automaattisesti
+      <div class="form-group"><label class="form-label">ALV-käsittely</label>
+        <select class="form-select" id="k-kasittely" ${alvRekisteroity ? '' : 'disabled'}>
+          ${Object.entries(OSTON_ALV_KASITTELYT).map(([k, v]) => html`<option value="${k}"
+            ${(kulu?.alv_kasittely || (alvRekisteroity ? 'normaali' : 'ei_alv')) === k ? 'selected' : ''}>${v}</option>`)}
+        </select></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label" id="k-summa-label">Summa *</label>
+          <input class="form-input" type="number" id="k-summa" value="${summa}" min="0.01" step="0.01" required ${pankista ? 'readonly' : ''} /></div>
+        <div class="form-group"><label class="form-label">ALV-kanta</label>
+          <select class="form-select" id="k-alv">${kannat.map(k => html`<option value="${k.arvo}"
+            ${Number(kulu?.alv_kanta ?? 25.5) === k.arvo ? 'selected' : ''}>${k.nimi}</option>`)}</select></div>
       </div>
-
-      <div class="form-group">
-        <label class="form-label">Kuitin numero</label>
-        <input class="form-input" type="text" id="k-kuitti" value="${kulu?.kuitin_numero || ''}"
-          placeholder="Vapaaehtoinen kuitin tai tositteen numero" />
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:var(--s3);font-size:0.875rem">
+        <input type="checkbox" id="k-vahennys" ${kulu ? (kulu.alv_vahennys ? 'checked' : '') : 'checked'} ${alvRekisteroity ? '' : 'disabled'} />
+        ALV on vähennyskelpoinen (ei edustusta, ei yksityiskäyttöä)
+      </label>
+      <div id="k-laskelma" class="alert alert-info" style="font-size:0.85rem;margin-bottom:var(--s3)"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Kuitin / laskun numero</label>
+          <input class="form-input" type="text" id="k-kuitti" maxlength="60" value="${kulu?.kuitin_numero || ''}" /></div>
+        <div class="form-group"><label class="form-label">Tosite (kuitti / lasku) ${kulu?.liitteet?.length ? `– ${kulu.liitteet.length} liitetty` : ''}</label>
+          <input class="form-input" type="file" id="k-liite" accept="application/pdf,image/*,.xml" /></div>
       </div>
-
       <div id="kulu-virhe" class="alert alert-error hidden"></div>
-
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" id="peruuta-kulu">Peruuta</button>
-        <button type="submit" class="btn btn-primary">Tallenna</button>
+        <button type="submit" class="btn btn-primary" id="tallenna-kulu">Tallenna ja kirjaa</button>
       </div>
-    </form>
-  `
-
-  avaaModaali(html)
+    </form>`)
 
   document.getElementById('peruuta-kulu')?.addEventListener('click', suljeModaali)
+  const $ = (id) => document.getElementById(id)
 
-  // Live veroton-näyttö
-  const paivitaVeroton = () => {
-    const summa = parseFloat(document.getElementById('k-summa')?.value) || 0
-    const alv = parseFloat(document.getElementById('k-alv')?.value) || 0
-    const el = document.getElementById('k-veroton-naytto')
-    if (!el) return
-    if (alv === 0) {
-      el.textContent = 'ALV 0 % — koko summa verotonta'
+  const paivitaLaskelma = () => {
+    const kasittely = $('k-kasittely').value
+    const s = Number($('k-summa').value) || 0
+    const kanta = Number($('k-alv').value)
+    const kaannetty = kasittely.endsWith('osto')
+    $('k-alv').disabled = kasittely === 'ei_alv' || !alvRekisteroity
+    $('k-summa-label').textContent = kaannetty ? 'Summa (veroton, laskulla ei ALV:tä) *' : 'Summa (sisältää ALV:n) *'
+    const el = $('k-laskelma')
+    if (kasittely === 'ei_alv' || !alvRekisteroity) {
+      el.textContent = 'Ei arvonlisäveroa: koko summa kirjataan kuluksi.'
+    } else if (kaannetty) {
+      const { alv } = laskeALV(s, kanta)
+      el.textContent = `Käännetty verovelvollisuus: ilmoitat itse ALV:n ${formatoiEuro(alv)} (${kanta} %) myynnin verona` +
+        ($('k-vahennys').checked ? ' ja vähennät saman summan.' : '. Vero ei ole vähennyskelpoinen.')
     } else {
-      const { verotonHinta, alv: alvSumma } = eritteleALV(summa, alv)
-      el.textContent = `Veroton: ${formatoiEuro(verotonHinta)} | ALV ${alv}%: ${formatoiEuro(alvSumma)}`
+      const { verotonHinta, alv } = eritteleALV(s, kanta)
+      el.textContent = $('k-vahennys').checked
+        ? `Veroton ${formatoiEuro(verotonHinta)} + vähennettävä ALV ${formatoiEuro(alv)}`
+        : `Kuluksi koko summa ${formatoiEuro(s)} (ALV ${formatoiEuro(alv)} ei vähennyskelpoinen)`
     }
   }
+  $('k-tili')?.addEventListener('change', (e) => {
+    const valittu = e.target.selectedOptions[0]
+    if (valittu?.dataset.alv) $('k-vahennys').checked = valittu.dataset.alv === 'vahennys'
+    paivitaLaskelma()
+  })
+  for (const id of ['k-summa', 'k-alv', 'k-kasittely', 'k-vahennys']) {
+    $(id)?.addEventListener('input', paivitaLaskelma)
+    $(id)?.addEventListener('change', paivitaLaskelma)
+  }
+  paivitaLaskelma()
 
-  document.getElementById('k-summa')?.addEventListener('input', paivitaVeroton)
-  document.getElementById('k-alv')?.addEventListener('change', paivitaVeroton)
-  paivitaVeroton()
-
-  document.getElementById('kulu-form')?.addEventListener('submit', async (e) => {
+  $('kulu-form')?.addEventListener('submit', async (e) => {
     e.preventDefault()
-    const virheEl = document.getElementById('kulu-virhe')
-    virheEl.classList.add('hidden')
-
-    const data = {
-      id:            kulu?.id || undefined,
-      paiva:         document.getElementById('k-paiva').value,
-      kuvaus:        document.getElementById('k-kuvaus').value.trim(),
-      summa:         parseFloat(document.getElementById('k-summa').value),
-      alv_kanta:     parseFloat(document.getElementById('k-alv').value),
-      kategoria:     document.getElementById('k-kategoria').value,
-      kuitin_numero: document.getElementById('k-kuitti').value.trim() || null,
-    }
-
+    const virhe = $('kulu-virhe')
+    virhe.classList.add('hidden')
+    const btn = $('tallenna-kulu')
+    btn.disabled = true
     try {
-      await tallennaKulu(_kayttajaId, data)
+      const tiedosto = $('k-liite').files[0]
+      if (!tiedosto && !kulu?.liitteet?.length) {
+        const ok = await naytaVahvistus('Kululle ei ole liitetty tositetta. Kirjanpitolain mukaan jokaisella kirjauksella on oltava tosite. Liitä se mahdollisimman pian.',
+          'Tosite puuttuu', { okTeksti: 'Tallenna silti', vaarallinen: false })
+        if (!ok) return
+      }
+      const liitteet = tiedosto ? [await lataaLiite(_kayttajaId, tiedosto)] : []
+      await tallennaKulu({
+        id: kulu?.id || null,
+        paiva: $('k-paiva').value,
+        toimittaja: $('k-toimittaja').value.trim(),
+        kuvaus: $('k-kuvaus').value.trim(),
+        tili: $('k-tili').value,
+        maksutapa: pankista ? 'pankki' : $('k-maksutapa').value,
+        alv_kasittely: alvRekisteroity ? $('k-kasittely').value : 'ei_alv',
+        summa: Number($('k-summa').value),
+        alv_kanta: $('k-kasittely').value === 'ei_alv' ? 0 : Number($('k-alv').value),
+        alv_vahennys: alvRekisteroity && $('k-vahennys').checked,
+        kuitin_numero: $('k-kuitti').value.trim(),
+        liitteet,
+        pankkitapahtuma_id: pankkitapahtuma?.id || null,
+      })
       suljeModaali()
-      naytaToast(kulu ? 'Kulu päivitetty!' : 'Kulu kirjattu!', 'success')
-      _kulut = await haeKulut(_kayttajaId)
-      renderKuluLista()
+      naytaToast(kulu ? 'Kulu korjattu' : 'Kulu kirjattu', 'success')
+      if (onValmis) onValmis()
+      else await paivita()
     } catch (err) {
-      virheEl.textContent = 'Tallennus epäonnistui: ' + err.message
-      virheEl.classList.remove('hidden')
+      virhe.textContent = 'Tallennus epäonnistui: ' + err.message
+      virhe.classList.remove('hidden')
+    } finally {
+      btn.disabled = false
     }
   })
 }

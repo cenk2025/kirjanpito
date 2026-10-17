@@ -1,80 +1,68 @@
 // ═══════════════════════════════════════════════════════
-// MAIN — Entry point
+// MAIN — Sovelluksen käynnistys
 // ═══════════════════════════════════════════════════════
 
 import './styles/main.css'
-import { alustAuth, paivitaSivupalkkiKayttaja, haeNykyinenKayttaja } from './js/auth.js'
-import { alustaModaali } from './js/ui.js'
-import { rekisteroiReitti, alustRouter, navigoi } from './js/router.js'
+import { alustAuth, paivitaSivupalkkiKayttaja } from './js/auth.js'
+import { alustaModaali, naytaVirhe } from './js/ui.js'
+import { rekisteroiReitti, alustRouter } from './js/router.js'
+import { alustaKirjanpito, haeProfiili } from './utils/supabase.js'
 import { renderKojelauta } from './js/dashboard.js'
 import { renderLaskut } from './js/laskut.js'
 import { renderAsiakkaat } from './js/asiakkaat.js'
 import { renderKulut } from './js/kulut.js'
+import { renderPankki } from './js/pankki.js'
+import { renderKirjanpito } from './js/kirjanpito.js'
 import { renderVerolaskelma } from './js/verolaskelma.js'
 import { renderRaportit } from './js/raportit.js'
 import { renderAsetukset } from './js/asetukset.js'
 
-// ─── Mobiilinavigaatio ─────────────────────────────────
-
 function alustaMobiiliNav() {
   const menuToggle = document.getElementById('menu-toggle')
-  const sidebarClose = document.getElementById('sidebar-close')
   const sidebar = document.getElementById('sidebar')
-
   menuToggle?.addEventListener('click', () => sidebar?.classList.add('open'))
-  sidebarClose?.addEventListener('click', () => sidebar?.classList.remove('open'))
-
-  // Taustaklikkaus sulkee sidebarin
+  document.getElementById('sidebar-close')?.addEventListener('click', () => sidebar?.classList.remove('open'))
   document.addEventListener('click', (e) => {
-    if (
-      sidebar?.classList.contains('open') &&
-      !sidebar.contains(e.target) &&
-      !menuToggle?.contains(e.target)
-    ) {
+    if (sidebar?.classList.contains('open') && !sidebar.contains(e.target) && !menuToggle?.contains(e.target)) {
       sidebar.classList.remove('open')
     }
   })
 }
 
-// ─── Näkymät kirjautumisen jälkeen ────────────────────
-
 function rekisteroiReitit(kayttajaId) {
   rekisteroiReitti('kojelauta',    () => renderKojelauta(kayttajaId))
   rekisteroiReitti('laskut',       (polku) => renderLaskut(kayttajaId, polku))
   rekisteroiReitti('asiakkaat',    () => renderAsiakkaat(kayttajaId))
+  rekisteroiReitti('pankki',       () => renderPankki(kayttajaId))
   rekisteroiReitti('kulut',        () => renderKulut(kayttajaId))
+  rekisteroiReitti('kirjanpito',   (polku) => renderKirjanpito(kayttajaId, polku))
   rekisteroiReitti('verolaskelma', () => renderVerolaskelma(kayttajaId))
-  rekisteroiReitti('raportit',     () => renderRaportit(kayttajaId))
+  rekisteroiReitti('raportit',     (polku) => renderRaportit(kayttajaId, polku))
   rekisteroiReitti('asetukset',    () => renderAsetukset(kayttajaId))
 }
 
-// ─── Kirjautuminen ─────────────────────────────────────
-
 async function onKirjautunut(kayttaja) {
-  const loginView = document.getElementById('login-view')
-  const appShell  = document.getElementById('app-shell')
+  document.getElementById('login-view')?.classList.add('hidden')
+  document.getElementById('app-shell')?.classList.remove('hidden')
 
-  loginView?.classList.add('hidden')
-  appShell?.classList.remove('hidden')
+  try {
+    await alustaKirjanpito()
+  } catch (err) {
+    naytaVirhe('Kirjanpidon alustus epäonnistui', err)
+  }
+  const profiili = await haeProfiili(kayttaja.id).catch(() => null)
+  paivitaSivupalkkiKayttaja(kayttaja, profiili?.yritys_nimi)
 
-  paivitaSivupalkkiKayttaja(kayttaja)
   rekisteroiReitit(kayttaja.id)
   alustRouter()
   alustaMobiiliNav()
 }
 
 function onKirjautunutUlos() {
-  const loginView = document.getElementById('login-view')
-  const appShell  = document.getElementById('app-shell')
-
-  appShell?.classList.add('hidden')
-  loginView?.classList.remove('hidden')
-
-  // Tyhjennä hash ja lataa sivu uudelleen
+  // Täysi uudelleenlataus tyhjentää muistissa olevat tiedot
   window.location.hash = ''
+  window.location.reload()
 }
-
-// ─── Käynnistys ────────────────────────────────────────
 
 alustaModaali()
 alustAuth(onKirjautunut, onKirjautunutUlos)

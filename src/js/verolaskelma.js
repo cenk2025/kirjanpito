@@ -1,189 +1,131 @@
 // ═══════════════════════════════════════════════════════
-// VEROLASKELMA — Tax calculator
+// VEROT JA MÄÄRÄAJAT — Oy:n yhteisöveroarvio, YEL ja verokalenteri
 // ═══════════════════════════════════════════════════════
 
-import { haeProfiili } from '../utils/supabase.js'
+import { haeProfiili, haeTilikaudet, haeTilisaldot } from '../utils/supabase.js'
+import { formatoiEuro, formatoiPaiva, formatoiProsentti, isoTanaan } from '../utils/formatters.js'
 import {
-  laskeYEL, laskeArviolinenTulovero,
-  YEL_RAJAT, YEL_PROSENTIT, haeALVKaudet
+  laskeYEL, laskeYhteisovero, YEL_RAJAT, YEL_PROSENTTI, YEL_VUOSI, YHTEISOVERO_PROSENTTI,
+  haeALVKaudet, lisaaPaivia,
 } from '../utils/laskuri.js'
-import { formatoiEuro, formatoiProsentti } from '../utils/formatters.js'
-import { renderNakyma, asetaTopbarToiminnot, naytaToast } from './ui.js'
+import { html } from '../utils/html.js'
+import { renderNakyma, asetaTopbarToiminnot, virheNakyma, naytaLatausRuutu } from './ui.js'
+import { laskeTuloslaskelma } from './raportit.js'
 
-let _kayttajaId = null
-let _profiili = null
+function lisaaKuukausia(iso, kk) {
+  const [v, k, p] = iso.split('-').map(Number)
+  const d = new Date(Date.UTC(v, k - 1 + kk + 1, 0))      // kuukauden viimeinen
+  return new Date(Date.UTC(v, k - 1 + kk, Math.min(p, d.getUTCDate()))).toISOString().slice(0, 10)
+}
 
 export async function renderVerolaskelma(kayttajaId) {
-  _kayttajaId = kayttajaId
   asetaTopbarToiminnot('')
-  renderNakyma('<div class="loading-screen"><div class="spinner"></div></div>')
-
+  naytaLatausRuutu()
   try {
-    _profiili = await haeProfiili(kayttajaId)
-    renderVerolaskelmaHTML()
+    const [p, kaudet] = await Promise.all([haeProfiili(kayttajaId), haeTilikaudet()])
+    const tanaan = isoTanaan()
+    const kausi = kaudet.find(k => k.alku <= tanaan && k.loppu >= tanaan) || kaudet[0]
+    const saldot = kausi ? await haeTilisaldot(kausi.alku, kausi.loppu) : []
+    renderSivu(p || {}, kausi, saldot, kaudet)
   } catch (err) {
-    renderNakyma(`<div class="alert alert-error">Virhe: ${err.message}</div>`)
+    virheNakyma('Verolaskelman lataus epäonnistui', err)
   }
 }
 
-function renderVerolaskelmaHTML() {
-  const yelTyotulo = _profiili?.yel_tyotulo || 40000
-  const ika = _profiili?.ika || 40
-  const uusiYrittaja = _profiili?.uusi_yrittaja || false
-  const kunnallisVero = _profiili?.kunnallisvero || 21.5
-  const vuosi = new Date().getFullYear()
-  const alvKaudet = haeALVKaudet(vuosi)
+function renderSivu(p, kausi, saldot, kaudet) {
+  const tulos = laskeTuloslaskelma(saldot)
+  const t7600 = saldot.find(s => s.numero === '7600')
+  const edustus = t7600 ? Number(t7600.debet) - Number(t7600.kredit) : 0
+  const lisays = Math.round(edustus * 0.5 * 100) / 100     // edustusmenoista 50 % vähennyskelvotonta (EVL 8 § 1 mom. 8 k.)
+  const vero = laskeYhteisovero(tulos.ennen_veroja, lisays, 0)
+  const yel = laskeYEL(p.yel_tyotulo || 0, p.uusi_yrittaja)
+  const tanaan = isoTanaan()
 
-  const yel = laskeYEL(yelTyotulo, ika, uusiYrittaja)
-  const tulo = laskeArviolinenTulovero(yelTyotulo, kunnallisVero)
-
-  renderNakyma(`
-    <div class="section-header">
-      <div>
-        <h1 class="section-title">Verolaskelma</h1>
-        <p class="section-sub">Arviot perustuvat ${vuosi} verotaulukoihin</p>
-      </div>
-    </div>
-
-    <div class="alert alert-warning" style="margin-bottom:var(--s5)">
-      <strong>Huomio:</strong> Nämä ovat likimääräisiä arvioita. Tarkat verot vahvistaa Verohallinto. Konsultoi kirjanpitäjääsi.
-    </div>
-
-    <!-- YEL-laskelma -->
-    <div class="settings-section" style="margin-bottom:var(--s4)">
-      <h2 class="settings-section-title">YEL — Yrittäjän eläkevakuutus</h2>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s6)">
-        <div>
-          <div class="form-group">
-            <label class="form-label">YEL-työtulo (€/vuosi)</label>
-            <input class="form-input" type="number" id="yel-tyotulo" value="${yelTyotulo}"
-              min="${YEL_RAJAT.MIN}" max="${YEL_RAJAT.MAX}" step="100" />
-            <div class="form-hint">
-              Minimi: ${formatoiEuro(YEL_RAJAT.MIN)} — Maksimi: ${formatoiEuro(YEL_RAJAT.MAX)}
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Ikä</label>
-            <input class="form-input" type="number" id="yel-ika" value="${ika}" min="18" max="70" />
-            <div class="form-hint">53–62-vuotiaille korkeampi maksu (${YEL_PROSENTIT.KESKI} %)</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Uusi yrittäjä (alle 4 vuotta)</label>
-            <select class="form-select" id="yel-uusi">
-              <option value="ei" ${!uusiYrittaja ? 'selected' : ''}>Ei</option>
-              <option value="kylla" ${uusiYrittaja ? 'selected' : ''}>Kyllä (22 % alennus)</option>
-            </select>
-          </div>
-          <button class="btn btn-primary" id="laske-yel-btn">Laske YEL</button>
-        </div>
-
-        <div id="yel-tulos" class="yel-result">
-          <div style="font-size:0.75rem;color:var(--lime);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:var(--s3)">YEL-laskelma</div>
-          <div class="yel-row"><span>YEL-työtulo</span><strong>${formatoiEuro(yelTyotulo)} / vuosi</strong></div>
-          <div class="yel-row"><span>YEL-prosentti</span><strong>${formatoiProsentti(yel.prosentti)}</strong></div>
-          ${uusiYrittaja ? '<div class="yel-row"><span>Uuden yrittäjän alennus</span><strong style="color:var(--green)">−22 %</strong></div>' : ''}
-          <div class="yel-row"><span>Maksu / kuukausi</span><strong>${formatoiEuro(yel.kuukausimaksu)}</strong></div>
-          <div class="yel-row" style="margin-top:var(--s2);padding-top:var(--s2)"><span>Maksu / vuosi</span><strong style="font-size:1.1rem">${formatoiEuro(yel.vuosimaksu)}</strong></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Tuloveroarvio -->
-    <div class="settings-section" style="margin-bottom:var(--s4)">
-      <h2 class="settings-section-title">Arvioitu tulovero ${vuosi}</h2>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--s6)">
-        <div>
-          <div class="form-group">
-            <label class="form-label">Verotettava tulo (€/vuosi)</label>
-            <input class="form-input" type="number" id="tv-tulo" value="${yelTyotulo}" step="100" />
-            <div class="form-hint">Tulo ennen verovähennyksiä (YEL-työtulo tai liikevaihto)</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Kunnallisvero % (paikkakunnittain)</label>
-            <input class="form-input" type="number" id="tv-kunnallis" value="${kunnallisVero}" min="16" max="25" step="0.5" />
-            <div class="form-hint">Tarkista oma kunnallisvero: vero.fi</div>
-          </div>
-          <button class="btn btn-primary" id="laske-tv-btn">Laske veroarvio</button>
-        </div>
-
-        <div id="tv-tulos" class="yel-result" style="background:var(--cyan-soft);border-color:var(--cyan-border)">
-          <div style="font-size:0.75rem;color:var(--cyan);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:var(--s3)">Tuloveroarvio</div>
-          <div class="yel-row"><span>Verotettava tulo</span><strong>${formatoiEuro(yelTyotulo)} / vuosi</strong></div>
-          <div class="yel-row"><span>Valtionvero</span><strong>${formatoiEuro(tulo.valtionvero)}</strong></div>
-          <div class="yel-row"><span>Kunnallisvero (${kunnallisVero} %)</span><strong>${formatoiEuro(tulo.kunnallisvero)}</strong></div>
-          <div class="yel-row" style="margin-top:var(--s2);padding-top:var(--s2)"><span>Verot yhteensä</span><strong style="font-size:1.1rem">${formatoiEuro(tulo.yhteensa)}</strong></div>
-          <div class="yel-row"><span>Efektiivinen veroprosentti</span><strong style="color:var(--cyan)">${formatoiProsentti(tulo.efektiivinenProsentti)}</strong></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ALV-kalenteri -->
-    <div class="settings-section">
-      <h2 class="settings-section-title">ALV-ilmoituskalenteri ${vuosi}</h2>
-      <p style="color:var(--text-2);font-size:0.875rem;margin-bottom:var(--s4)">
-        Muista ilmoittaa ALV Verohallinnolle kvartaaleittain (alle 100 000 € liikevaihto).
-        Määräpäivä: kvartaalin päättymistä seuraavan toisen kuukauden 12. päivä.
-      </p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:var(--s3)">
-        ${alvKaudet.map((kausi, i) => {
-          const maarapaivat = ['2026-05-12', '2026-08-12', '2026-11-12', '2027-02-12']
-          const onMenneisyydessa = new Date(maarapaivat[i]) < new Date()
-          return `
-            <div class="card" style="border-color:${onMenneisyydessa ? 'var(--border)' : 'var(--lime-border)'}">
-              <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-3);margin-bottom:var(--s2)">Q${i+1} ${vuosi}</div>
-              <div style="font-weight:600;margin-bottom:4px">${kausi.nimi}</div>
-              <div style="font-size:0.8rem;color:${onMenneisyydessa ? 'var(--text-3)' : 'var(--lime)'}">
-                Määräpäivä: ${maarapaivat[i].split('-').reverse().join('.')}
-              </div>
-              <div style="margin-top:var(--s2)">
-                <a href="#raportit" class="btn btn-ghost btn-sm" style="font-size:0.78rem">Avaa raportti</a>
-              </div>
-            </div>
-          `
-        }).join('')}
-      </div>
-    </div>
-  `)
-
-  // YEL-laskuri
-  document.getElementById('laske-yel-btn')?.addEventListener('click', () => {
-    const tyotulo = parseFloat(document.getElementById('yel-tyotulo').value) || 0
-    const ika = parseInt(document.getElementById('yel-ika').value) || 40
-    const uusi = document.getElementById('yel-uusi').value === 'kylla'
-
-    if (tyotulo < YEL_RAJAT.MIN) {
-      naytaToast(`YEL-työtulo ei voi olla alle ${formatoiEuro(YEL_RAJAT.MIN)}`, 'warning')
-      return
+  // Verokalenteri seuraavalle 12 kuukaudelle
+  const vuosi = Number(tanaan.slice(0, 4))
+  const tapahtumat = []
+  if (p.alv_rekisteroity !== false) {
+    for (const v of [vuosi - 1, vuosi, vuosi + 1]) {
+      for (const k of haeALVKaudet(v, p.alv_kausi || 'quarterly')) {
+        tapahtumat.push({ pvm: k.erapaiva, teksti: `ALV-ilmoitus ja maksu: ${k.nimi}`, linkki: '#raportit/alv' })
+      }
     }
+  }
+  for (const k of kaudet) {
+    tapahtumat.push({ pvm: lisaaKuukausia(k.loppu, 4), teksti: `Tilinpäätös valmis ja veroilmoitus 6B (tilikausi ${formatoiPaiva(k.alku)}–${formatoiPaiva(k.loppu)})`, linkki: '#raportit/tilinpaatos' })
+    tapahtumat.push({ pvm: lisaaKuukausia(k.loppu, 6), teksti: 'Varsinainen yhtiökokous viimeistään (OYL 5:3)' })
+    tapahtumat.push({ pvm: lisaaKuukausia(k.loppu, 8), teksti: 'Tilinpäätös PRH:lle viimeistään (KPL 3:9)' })
+  }
+  tapahtumat.push({ pvm: `${vuosi}-01-31`, teksti: 'Vuosi-ilmoitus tulorekisteriin (jos palkkoja / työkorvauksia)' })
+  const tulevat = tapahtumat.filter(t => t.pvm >= tanaan && t.pvm <= lisaaPaivia(tanaan, 400)).sort((a, b) => a.pvm.localeCompare(b.pvm))
 
-    const yel = laskeYEL(tyotulo, ika, uusi)
-    document.getElementById('yel-tulos').innerHTML = `
-      <div style="font-size:0.75rem;color:var(--lime);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:var(--s3)">YEL-laskelma</div>
-      <div class="yel-row"><span>YEL-työtulo</span><strong>${formatoiEuro(tyotulo)} / vuosi</strong></div>
-      <div class="yel-row"><span>YEL-prosentti</span><strong>${formatoiProsentti(yel.prosentti)}</strong></div>
-      ${uusi ? '<div class="yel-row"><span>Uuden yrittäjän alennus</span><strong style="color:var(--green)">−22 %</strong></div>' : ''}
-      <div class="yel-row"><span>Maksu / kuukausi</span><strong>${formatoiEuro(yel.kuukausimaksu)}</strong></div>
-      <div class="yel-row" style="margin-top:var(--s2);padding-top:var(--s2)"><span>Maksu / vuosi</span><strong style="font-size:1.1rem">${formatoiEuro(yel.vuosimaksu)}</strong></div>
-    `
-    naytaToast('YEL laskettu', 'success')
-  })
+  renderNakyma(html`
+    <div class="section-header"><div><h1 class="section-title">Verot ja määräajat</h1>
+      <p class="section-sub">${p.yritys_nimi || 'Osakeyhtiö'} · arviot perustuvat kirjanpidon lukuihin</p></div></div>
+    <div class="alert alert-warning" style="margin-bottom:var(--s5)">Arviot ovat suuntaa antavia. Lopullisen veron vahvistaa Verohallinto.
+      Tarkista ennakkoveron määrä OmaVerossa ja hae muutosta, jos tulos poikkeaa arviosta.</div>
 
-  // Tulovero-laskuri
-  document.getElementById('laske-tv-btn')?.addEventListener('click', () => {
-    const tulo = parseFloat(document.getElementById('tv-tulo').value) || 0
-    const kunnallis = parseFloat(document.getElementById('tv-kunnallis').value) || 21.5
-    const tulos = laskeArviolinenTulovero(tulo, kunnallis)
+    <div class="tax-summary-grid">
+      <div class="tax-card">
+        <div class="tax-card-title">Yhteisövero (arvio, ${YHTEISOVERO_PROSENTTI} %)</div>
+        <div class="tax-amount">${formatoiEuro(vero.vero)}</div>
+        <div class="tax-detail">Tulos ennen veroja ${formatoiEuro(tulos.ennen_veroja)}
+          ${lisays ? html`<br>+ vähennyskelvoton osuus edustuskuluista ${formatoiEuro(lisays)}` : ''}
+          <br>Verotettava tulo ${formatoiEuro(vero.verotettava)}
+          ${kausi ? html`<br>Tilikausi ${formatoiPaiva(kausi.alku)}–${formatoiPaiva(kausi.loppu)}` : ''}</div>
+      </div>
+      <div class="tax-card">
+        <div class="tax-card-title">YEL ${YEL_VUOSI} (${formatoiProsentti(yel.prosentti, 2)})</div>
+        <div class="tax-amount">${formatoiEuro(yel.kuukausimaksu)} / kk</div>
+        <div class="tax-detail">YEL-työtulo ${formatoiEuro(p.yel_tyotulo || 0)} · ${formatoiEuro(yel.vuosimaksu)} / v
+          ${yel.alennettu ? html`<br>Aloittavan yrittäjän alennus 22 % (48 kk)` : ''}
+          ${yel.alleAlarajan ? html`<br><strong>Työtulo on alle alarajan ${formatoiEuro(YEL_RAJAT.MIN)}: vakuutusta ei voi ottaa.</strong>` : ''}</div>
+      </div>
+      <div class="tax-card">
+        <div class="tax-card-title">Tilikauden tulos</div>
+        <div class="tax-amount">${formatoiEuro(tulos.tulos)}</div>
+        <div class="tax-detail">Liikevaihto ${formatoiEuro(tulos.liikevaihto)}<br>Liikevoitto ${formatoiEuro(tulos.liikevoitto)}</div>
+      </div>
+    </div>
 
-    document.getElementById('tv-tulos').innerHTML = `
-      <div style="font-size:0.75rem;color:var(--cyan);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:var(--s3)">Tuloveroarvio</div>
-      <div class="yel-row"><span>Verotettava tulo</span><strong>${formatoiEuro(tulo)} / vuosi</strong></div>
-      <div class="yel-row"><span>Valtionvero</span><strong>${formatoiEuro(tulos.valtionvero)}</strong></div>
-      <div class="yel-row"><span>Kunnallisvero (${kunnallis} %)</span><strong>${formatoiEuro(tulos.kunnallisvero)}</strong></div>
-      <div class="yel-row" style="margin-top:var(--s2);padding-top:var(--s2)"><span>Verot yhteensä</span><strong style="font-size:1.1rem">${formatoiEuro(tulos.yhteensa)}</strong></div>
-      <div class="yel-row"><span>Efektiivinen veroprosentti</span><strong style="color:var(--cyan)">${formatoiProsentti(tulos.efektiivinenProsentti)}</strong></div>
-    `
-    naytaToast('Veroarvio laskettu', 'success')
-  })
+    <div class="settings-section" style="margin-top:var(--s5)">
+      <h2 class="settings-section-title">YEL-laskuri ${YEL_VUOSI}</h2>
+      <p style="color:var(--text-2);font-size:0.875rem;margin-bottom:var(--s3)">
+        Osakeyhtiön osakas on YEL-vakuutettu, jos hän työskentelee yhtiössä johtavassa asemassa ja omistaa yli 30 %
+        (yksin) tai yli 50 % (perheenjäsenten kanssa). YEL on osakkaan henkilökohtainen vakuutus: jos yhtiö maksaa sen,
+        maksu on osakkaalle veronalaista palkkaa (kirjaa palkkana ja ilmoita tulorekisteriin). Maksu ${formatoiProsentti(YEL_PROSENTTI, 2)}
+        iästä riippumatta, työtulo ${formatoiEuro(YEL_RAJAT.MIN)} – ${formatoiEuro(YEL_RAJAT.MAX)}.</p>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">YEL-työtulo (€/v)</label>
+          <input class="form-input" type="number" id="yel-tulo" value="${p.yel_tyotulo || ''}" min="0" step="100" /></div>
+        <div class="form-group"><label class="form-label">Aloittava yrittäjä</label>
+          <select class="form-select" id="yel-uusi"><option value="0">Ei</option><option value="1" ${p.uusi_yrittaja ? 'selected' : ''}>Kyllä (−22 %)</option></select></div>
+      </div>
+      <div class="yel-result" id="yel-tulos"></div>
+    </div>
+
+    <div class="settings-section">
+      <h2 class="settings-section-title">Tulevat määräajat</h2>
+      <table class="table"><tbody>
+        ${tulevat.map(t => html`<tr><td style="white-space:nowrap">${formatoiPaiva(t.pvm)}</td>
+          <td>${t.linkki ? html`<a href="${t.linkki}">${t.teksti}</a>` : t.teksti}</td></tr>`)}
+      </tbody></table>
+      <p style="color:var(--text-3);font-size:0.8rem;margin-top:var(--s3);line-height:1.6">
+        Lisäksi: yhteenvetoilmoitus EU-myynneistä kuukausittain seuraavan kuukauden 20. päivään mennessä;
+        palkoista tulorekisteri-ilmoitus 5 päivän kuluessa maksupäivästä ja työnantajasuoritukset (ennakonpidätykset,
+        sairausvakuutusmaksu) seuraavan kuukauden 12. päivään mennessä; ennakkoverot OmaVeron eräpäivinä.
+        Pyhäpäiviä ei ole huomioitu eräpäivissä.</p>
+    </div>`)
+
+  const paivitaYel = () => {
+    const y = laskeYEL(Number(document.getElementById('yel-tulo').value) || 0, document.getElementById('yel-uusi').value === '1')
+    document.getElementById('yel-tulos').innerHTML = String(html`
+      <div class="yel-row"><span>Maksuprosentti</span><strong>${formatoiProsentti(y.prosentti, 2)}</strong></div>
+      <div class="yel-row"><span>Vuosimaksu</span><strong>${formatoiEuro(y.vuosimaksu)}</strong></div>
+      <div class="yel-row"><span>Kuukausimaksu</span><strong>${formatoiEuro(y.kuukausimaksu)}</strong></div>
+      ${y.alleAlarajan ? html`<div class="yel-row"><span>Huom.</span><strong>Alle alarajan</strong></div>` : ''}`)
+  }
+  document.getElementById('yel-tulo')?.addEventListener('input', paivitaYel)
+  document.getElementById('yel-uusi')?.addEventListener('change', paivitaYel)
+  paivitaYel()
 }

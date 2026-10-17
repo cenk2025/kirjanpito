@@ -6,13 +6,16 @@ import { asetaSivuOtsikko } from './ui.js'
 
 const _reitit = {}
 let _nykyinenReitti = null
+let _alustettu = false
 
 const SIVUOTSIKOT = {
   kojelauta:    'Kojelauta',
   laskut:       'Laskut',
   asiakkaat:    'Asiakkaat',
-  kulut:        'Kulut',
-  verolaskelma: 'Verolaskelma',
+  pankki:       'Pankki',
+  kulut:        'Kulut ja ostot',
+  kirjanpito:   'Kirjanpito',
+  verolaskelma: 'Verot ja määräajat',
   raportit:     'Raportit',
   asetukset:    'Asetukset',
 }
@@ -22,7 +25,8 @@ export function rekisteroiReitti(polku, handler) {
 }
 
 export function navigoi(polku) {
-  window.location.hash = polku
+  if (window.location.hash.replace('#', '') === polku) kasitteleHash()
+  else window.location.hash = polku
 }
 
 export function haeNykyinenReitti() {
@@ -30,35 +34,30 @@ export function haeNykyinenReitti() {
 }
 
 export function alustRouter() {
-  window.addEventListener('hashchange', kasiitteleHash)
-  kasiitteleHash()
+  if (!_alustettu) {
+    window.addEventListener('hashchange', kasitteleHash)
+    _alustettu = true
+  }
+  kasitteleHash()
 }
 
-function kasiitteleHash() {
-  const hash = window.location.hash.replace('#', '') || 'kojelauta'
+function kasitteleHash() {
+  const hash = decodeURIComponent(window.location.hash.replace('#', '')) || 'kojelauta'
+  const perusReitti = hash.split('/')[0]
 
-  // Päivitä aktiivinen nav-linkki
   document.querySelectorAll('.nav-item').forEach(link => {
-    const reitti = link.dataset.route
-    link.classList.toggle('active', hash === reitti || hash.startsWith(reitti + '/'))
+    link.classList.toggle('active', link.dataset.route === perusReitti)
   })
 
-  // Aseta sivuotsikko
-  const perusReitti = hash.split('/')[0]
   if (SIVUOTSIKOT[perusReitti]) {
     asetaSivuOtsikko(SIVUOTSIKOT[perusReitti])
     document.title = `${SIVUOTSIKOT[perusReitti]} — Kirjanpito`
   }
 
   _nykyinenReitti = hash
-
-  // Kutsu handleria
-  const handler = _reitit[perusReitti] || _reitit['kojelauta']
+  const handler = _reitit[perusReitti] || _reitit.kojelauta
   if (handler) handler(hash)
 
-  // Sulje mobiilinavigaatio
   document.getElementById('sidebar')?.classList.remove('open')
-
-  // Skrollaa ylös
   document.getElementById('content-area')?.scrollTo(0, 0)
 }

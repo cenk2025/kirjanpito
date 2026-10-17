@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Kirjanpito — Yrittäjän taloustyökalu</title>
+  <title>Kirjanpito</title>
+  <meta name="referrer" content="no-referrer" />
+  <meta name="robots" content="noindex, nofollow" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/src/styles/main.css" />
 </head>
 <body>
 
@@ -23,7 +24,7 @@
         <span class="logo-text">Kirjanpito</span>
       </div>
       <h1>Kirjaudu sisään</h1>
-      <p class="login-sub">Yrittäjän taloustyökalu</p>
+      <p class="login-sub">Osakeyhtiön kirjanpito</p>
       <form id="login-form" novalidate>
         <div class="form-group">
           <label class="form-label" for="login-email">Sähköposti</label>
@@ -39,36 +40,23 @@
           <span class="btn-loading hidden">Kirjaudutaan...</span>
         </button>
       </form>
-      <p class="login-footer">
-        Ei tiliä vielä?
-        <a href="#" id="show-register">Luo tunnus</a>
-      </p>
+      <p class="login-footer">Tunnukset luo ylläpitäjä. Rekisteröityminen on suljettu.</p>
     </div>
-    <!-- Rekisteröinti-popup -->
-    <div id="register-card" class="login-card hidden">
-      <div class="login-logo">
-        <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-          <rect width="36" height="36" rx="10" fill="rgba(163,230,53,0.12)"/>
-          <path d="M10 26L18 10L26 26" stroke="#a3e635" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M13 21h10" stroke="#a3e635" stroke-width="2.5" stroke-linecap="round"/>
-        </svg>
-        <span class="logo-text">Kirjanpito</span>
-      </div>
-      <h1>Luo tunnus</h1>
-      <form id="register-form" novalidate>
+
+    <!-- Kaksivaiheinen tunnistautuminen -->
+    <div id="mfa-card" class="login-card hidden">
+      <h1>Vahvistuskoodi</h1>
+      <p class="login-sub">Syötä todennussovelluksen (esim. Microsoft/Google Authenticator) 6-numeroinen koodi.</p>
+      <form id="mfa-form" novalidate>
         <div class="form-group">
-          <label class="form-label" for="reg-email">Sähköposti</label>
-          <input class="form-input" type="email" id="reg-email" placeholder="sinä@yritys.fi" required />
+          <label class="form-label" for="mfa-koodi">Koodi</label>
+          <input class="form-input" type="text" id="mfa-koodi" inputmode="numeric" autocomplete="one-time-code"
+            pattern="[0-9]{6}" maxlength="6" required />
         </div>
-        <div class="form-group">
-          <label class="form-label" for="reg-password">Salasana</label>
-          <input class="form-input" type="password" id="reg-password" placeholder="Vähintään 8 merkkiä" required />
-        </div>
-        <div id="register-error" class="alert alert-error hidden"></div>
-        <div id="register-success" class="alert alert-success hidden"></div>
-        <button type="submit" class="btn btn-primary btn-full" id="register-btn">Luo tunnus</button>
+        <div id="mfa-error" class="alert alert-error hidden"></div>
+        <button type="submit" class="btn btn-primary btn-full" id="mfa-btn">Vahvista</button>
       </form>
-      <p class="login-footer"><a href="#" id="show-login">← Takaisin kirjautumiseen</a></p>
+      <p class="login-footer"><a href="#" id="mfa-peruuta">← Kirjaudu ulos</a></p>
     </div>
   </div>
 
@@ -116,6 +104,12 @@
           </svg>
           <span>Asiakkaat</span>
         </a>
+        <a href="#pankki" class="nav-item" data-route="pankki">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M3 10l9-6 9 6"/><path d="M5 10v8M9 10v8M15 10v8M19 10v8"/><path d="M3 20h18"/>
+          </svg>
+          <span>Pankki</span>
+        </a>
         <a href="#kulut" class="nav-item" data-route="kulut">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
             <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>
@@ -125,12 +119,18 @@
 
         <div class="nav-divider"></div>
 
+        <a href="#kirjanpito" class="nav-item" data-route="kirjanpito">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+          </svg>
+          <span>Kirjanpito</span>
+        </a>
         <a href="#verolaskelma" class="nav-item" data-route="verolaskelma">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
             <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/>
             <line x1="12" y1="17" x2="12" y2="21"/>
           </svg>
-          <span>Verolaskelma</span>
+          <span>Verot ja määräajat</span>
         </a>
         <a href="#raportit" class="nav-item" data-route="raportit">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -202,7 +202,10 @@
   <div id="confirm-container" class="modal-container hidden">
     <div class="modal-box modal-sm">
       <h3 id="confirm-title">Vahvista toiminto</h3>
-      <p id="confirm-message"></p>
+      <p id="confirm-message" style="white-space:pre-line"></p>
+      <div id="confirm-input-wrap" class="form-group hidden" style="margin-top:var(--s3)">
+        <input class="form-input" type="text" id="confirm-input" maxlength="500" />
+      </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="confirm-cancel">Peruuta</button>
         <button class="btn btn-danger" id="confirm-ok">Vahvista</button>
