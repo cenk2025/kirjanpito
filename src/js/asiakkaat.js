@@ -56,7 +56,7 @@ function renderLista() {
               <td>${a.verkkolaskuosoite || '—'}</td>
               <td><div class="table-actions">
                 <button class="btn btn-ghost btn-sm" data-action="muokkaa" data-id="${a.id}">Muokkaa</button>
-                <button class="btn btn-ghost btn-sm" data-action="poista" data-id="${a.id}" style="color:var(--red-soft)">
+                <button class="btn btn-ghost btn-sm" data-action="poista" data-id="${a.id}" style="color:var(--red)">
                   ${a.arkistoitu ? 'Palauta' : 'Poista'}</button>
               </div></td>
             </tr>`)}

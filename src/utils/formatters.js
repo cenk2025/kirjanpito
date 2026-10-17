@@ -12,7 +12,8 @@ const EURO = new Intl.NumberFormat('fi-FI', { style: 'currency', currency: 'EUR'
 export function formatoiEuro(summa) {
   const n = Number(summa)
   if (summa === null || summa === undefined || !Number.isFinite(n)) return '0,00 €'
-  return EURO.format(n)
+  // Pyöristys senteiksi ja negatiivisen nollan poisto (ei "−0,00 €")
+  return EURO.format(Math.round(n * 100) / 100 || 0)
 }
 
 export function formatoiLuku(luku, desimaalit = 2) {

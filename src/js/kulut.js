@@ -85,7 +85,7 @@ function renderLista() {
                 <td><div class="table-actions">${k.tila === 'peruttu' ? '' : html`
                   <button class="btn btn-ghost btn-sm" data-action="liita" data-id="${k.id}" title="Liitä tosite">+📎</button>
                   <button class="btn btn-ghost btn-sm" data-action="korjaa" data-id="${k.id}">Korjaa</button>
-                  ${k.pankkitapahtuma_id ? '' : html`<button class="btn btn-ghost btn-sm" data-action="peru" data-id="${k.id}" style="color:var(--red-soft)">Peru</button>`}`}
+                  ${k.pankkitapahtuma_id ? '' : html`<button class="btn btn-ghost btn-sm" data-action="peru" data-id="${k.id}" style="color:var(--red)">Peru</button>`}`}
                 </div></td>
               </tr>`)}
           </tbody>
