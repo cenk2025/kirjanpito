@@ -4,6 +4,7 @@
 
 import {
   kirjauduSisaan, kirjauduUlos, haeKayttaja, mfaTaso, mfaTekijat, mfaVahvista, onAuthStateChange,
+  supabaseMaaritetty,
 } from '../utils/supabase.js'
 import { naytaToast } from './ui.js'
 import { nimikirjaimet } from '../utils/formatters.js'
@@ -73,6 +74,14 @@ export async function alustAuth(onKirjautunut, onKirjautunutUlos) {
     }
   }
 
+  const MAARITYS_PUUTTUU = 'Sovelluksen tietokanta-asetukset puuttuvat tästä ympäristöstä ' +
+    '(VITE_SUPABASE_URL ja VITE_SUPABASE_ANON_KEY). Lisää ne Vercelin ympäristömuuttujiin ja julkaise uudelleen.'
+  if (!supabaseMaaritetty) {
+    const el = document.getElementById('login-error')
+    el.textContent = MAARITYS_PUUTTUU
+    el.classList.remove('hidden')
+  }
+
   // Kirjautuminen
   const loginForm = document.getElementById('login-form')
   loginForm?.addEventListener('submit', async (e) => {
@@ -90,7 +99,7 @@ export async function alustAuth(onKirjautunut, onKirjautunutUlos) {
       document.getElementById('login-password').value = ''
       await jatkaKirjautumista(data.user)
     } catch (err) {
-      virheEl.textContent = kaannaVirhe(err.message)
+      virheEl.textContent = supabaseMaaritetty ? kaannaVirhe(err.message) : MAARITYS_PUUTTUU
       virheEl.classList.remove('hidden')
     } finally {
       btn.disabled = false
@@ -164,9 +173,11 @@ function kaannaVirhe(virhe = '') {
     'Email not confirmed': 'Vahvista sähköpostiosoitteesi ensin.',
     'Too many requests': 'Liian monta yritystä. Odota hetki.',
     'rate limit': 'Liian monta yritystä. Odota hetki.',
+    'Failed to fetch': 'Yhteys tietokantaan epäonnistui. Tarkista verkkoyhteys ja Supabase-osoite.',
+    'NetworkError': 'Yhteys tietokantaan epäonnistui. Tarkista verkkoyhteys ja Supabase-osoite.',
   }
   for (const [en, fi] of Object.entries(kaannokset)) {
     if (virhe.toLowerCase().includes(en.toLowerCase())) return fi
   }
-  return 'Kirjautuminen epäonnistui. Yritä uudelleen.'
+  return `Kirjautuminen epäonnistui: ${virhe}`
 }
