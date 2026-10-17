@@ -838,7 +838,7 @@ ul { list-style: none; }
 /* Line items table */
 .line-items-header {
   display: grid;
-  grid-template-columns: 3fr 1fr 1fr 1fr 1fr auto;
+  grid-template-columns: 3fr 0.8fr 0.9fr 1fr 0.9fr 1fr auto;
   gap: var(--s2);
   padding: 0.5rem var(--s2);
   font-size: 0.75rem;
@@ -850,7 +850,7 @@ ul { list-style: none; }
 }
 .line-item-row {
   display: grid;
-  grid-template-columns: 3fr 1fr 1fr 1fr 1fr auto;
+  grid-template-columns: 3fr 0.8fr 0.9fr 1fr 0.9fr 1fr auto;
   gap: var(--s2);
   padding: var(--s2);
   border-bottom: 1px solid var(--border);
@@ -1076,7 +1076,7 @@ ul { list-style: none; }
 @media (max-width: 900px) {
   .invoice-form-grid { grid-template-columns: 1fr; }
   .line-items-header, .line-item-row {
-    grid-template-columns: 2fr 1fr 1fr auto;
+    grid-template-columns: 2fr 0.8fr 1fr 0.9fr 1fr auto;
   }
   .line-items-header .col-unit,
   .line-item-row .col-unit { display: none; }
@@ -1107,7 +1107,18 @@ ul { list-style: none; }
 @media (max-width: 480px) {
   .kpi-grid { grid-template-columns: 1fr; }
   .line-items-header, .line-item-row {
-    grid-template-columns: 1fr 1fr auto;
+    grid-template-columns: 1.6fr 0.8fr 1fr 1fr auto;
   }
   .col-alv-header, .col-alv { display: none; }
+}
+
+/* ─── Kirjanpitonäkymät ──────────────────────────────── */
+a.period-btn { text-decoration: none; display: inline-block; }
+.period-selector { flex-wrap: wrap; }
+.table-actions { gap: 4px; }
+.muistio-rivi { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: var(--s2); }
+.muistio-rivi .form-group { margin-bottom: var(--s1); }
+@media (max-width: 760px) {
+  .muistio-rivi { grid-template-columns: 1fr 1fr; }
+  .muistio-rivi .form-group:first-child { grid-column: 1 / -1; }
 }

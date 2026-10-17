@@ -1283,6 +1283,13 @@ BEGIN
     SELECT * INTO k FROM kulut WHERE id = v_id AND user_id = v_user FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'Kulua ei löydy'; END IF;
     IF k.tila = 'peruttu' THEN RAISE EXCEPTION 'Peruttua kulua ei voi muuttaa'; END IF;
+    IF k.pankkitapahtuma_id IS NOT NULL THEN
+      SELECT * INTO pt FROM pankkitapahtumat WHERE id = k.pankkitapahtuma_id;
+      IF -pt.summa <> round((p ->> 'summa')::numeric, 2) OR (p ->> 'paiva')::date <> pt.pvm
+         OR coalesce(p ->> 'maksutapa', 'pankki') <> 'pankki' THEN
+        RAISE EXCEPTION 'Pankkitapahtumaan liitetyn kulun summaa, päivää ja maksutapaa ei voi muuttaa';
+      END IF;
+    END IF;
     IF k.tosite_id IS NOT NULL THEN
       PERFORM public._oikaise_tosite(v_user, k.tosite_id, NULL, 'kulun korjaus');
     END IF;
@@ -1320,6 +1327,8 @@ BEGIN
 
   IF v_pt IS NOT NULL THEN
     UPDATE pankkitapahtumat SET tila = 'kasitelty', kulu_id = v_id, tosite_id = k.tosite_id WHERE id = v_pt;
+  ELSIF k.pankkitapahtuma_id IS NOT NULL THEN
+    UPDATE pankkitapahtumat SET tosite_id = k.tosite_id WHERE id = k.pankkitapahtuma_id;
   END IF;
   RETURN k;
 END $$;

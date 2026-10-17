@@ -215,3 +215,14 @@ SET ROLE anon;
 SELECT testi_odota_virhe($$SELECT count(*) FROM laskut$$, 'permission denied');
 SELECT testi_odota_virhe($$SELECT alusta_kirjanpito()$$, 'permission denied');
 RESET ROLE;
+
+-- Pankkiin liitetyn kulun korjaus: summa lukittu, tosite päivittyy
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
+SELECT testi_odota_virhe($$SELECT tallenna_kulu(jsonb_build_object('id', (SELECT id FROM kulut WHERE kuvaus = 'Palvelumaksu'),
+  'paiva','2026-04-13','kuvaus','Palvelumaksu','summa',10,'alv_kasittely','ei_alv','tili','7920'))$$, 'ei voi muuttaa');
+SELECT tallenna_kulu(jsonb_build_object('id', (SELECT id FROM kulut WHERE kuvaus = 'Palvelumaksu'),
+  'paiva','2026-04-13','kuvaus','Palvelumaksu, korjattu tili','summa',9.90,'alv_kasittely','ei_alv','tili','7990'));
+SELECT testi_assert((SELECT p.tosite_id = k.tosite_id FROM pankkitapahtumat p JOIN kulut k ON k.id = p.kulu_id
+                     WHERE k.kuvaus LIKE 'Palvelumaksu%'), 'pankkitapahtuman tosite päivittyy');
+RESET ROLE;

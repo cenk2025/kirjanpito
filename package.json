@@ -2,14 +2,26 @@
   "name": "kirjanpito",
   "private": true,
   "version": "1.0.0",
-  "description": "Suomalainen kirjanpitosovellus yrittäjille",
+  "description": "Lakisääteinen kirjanpito osakeyhtiölle (Supabase)",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:db": "bash supabase/tests/run.sh"
   },
   "devDependencies": {
-    "vite": "^5.0.0"
+    "happy-dom": "20.14.5",
+    "vite": "7.3.5",
+    "vitest": "4.1.12"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.116.0",
+    "jsbarcode": "3.12.3",
+    "qrcode": "1.5.4"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
